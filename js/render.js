@@ -212,15 +212,16 @@ export class Renderer {
   // ------------------------------------------------------------ instances
   buildInstances() {
     const lam = (opts) => new THREE.MeshLambertMaterial({ flatShading: true, ...opts });
-    const treeG = new THREE.ConeGeometry(0.0065, 0.02, 4); treeG.translate(0, 0.01, 0);
+    const treeG = new THREE.ConeGeometry(0.0075, 0.022, 4); treeG.translate(0, 0.011, 0);
     this.trees = new THREE.InstancedMesh(treeG, lam({}), 14000);
-    const wallG = new THREE.BoxGeometry(0.009, 0.007, 0.009); wallG.translate(0, 0.0035, 0);
-    this.walls = new THREE.InstancedMesh(wallG, lam({ color: 0xe8dcc0 }), 5000);
-    const roofG = new THREE.ConeGeometry(0.0085, 0.007, 4); roofG.rotateY(Math.PI / 4); roofG.translate(0, 0.0105, 0);
-    this.roofs = new THREE.InstancedMesh(roofG, lam({}), 5000);
+    const wallG = new THREE.BoxGeometry(0.008, 0.007, 0.008); wallG.translate(0, 0.0035, 0);
+    this.walls = new THREE.InstancedMesh(wallG, lam({ color: 0xe8dcc0 }), 12000);
+    const roofG = new THREE.ConeGeometry(0.0075, 0.006, 4); roofG.rotateY(Math.PI / 4); roofG.translate(0, 0.01, 0);
+    this.roofs = new THREE.InstancedMesh(roofG, lam({}), 12000);
+    this.houseOffsets = [[-0.006, -0.004], [0.006, -0.003], [0, 0.007]].map(([x, z]) => new THREE.Matrix4().makeTranslation(x, 0, z));
     const mineG = new THREE.ConeGeometry(0.008, 0.009, 3); mineG.translate(0, 0.0045, 0);
     this.mines = new THREE.InstancedMesh(mineG, lam({ color: 0x8a8580 }), 3000);
-    const unitG = new THREE.BoxGeometry(0.0045, 0.007, 0.0045); unitG.translate(0, 0.0035, 0);
+    const unitG = new THREE.BoxGeometry(0.004, 0.008, 0.004); unitG.translate(0, 0.004, 0);
     this.unitMesh = new THREE.InstancedMesh(unitG, new THREE.MeshBasicMaterial({}), 600);
     const poleG = new THREE.CylinderGeometry(0.0009, 0.0009, 0.04, 4); poleG.translate(0, 0.02, 0);
     this.poles = new THREE.InstancedMesh(poleG, new THREE.MeshBasicMaterial({ color: 0x3a2a1a }), 64);
@@ -249,13 +250,17 @@ export class Renderer {
     const treeA = C(0x2f6b2a), treeB = C(0x1f4f22), treeJ = C(0x1d7a35), treeT = C(0x35553a);
     for (let c = 0; c < w.count; c++) {
       const b = w.bld[c];
-      if (b === BLD.HOUSE && nh < 5000) {
-        const m = this.placeMatrix(c, 1);
-        this.walls.setMatrixAt(nh, m); this.roofs.setMatrixAt(nh, m);
+      if (b === BLD.HOUSE && nh < 11990) {
+        const base = this.placeMatrix(c, 1).clone();
         const o = w.owner[c];
-        if (o >= 0) { const t = s.tribes[o].color; col.setRGB(t[0] * 0.8, t[1] * 0.8, t[2] * 0.8); } else col.set(0x666666);
-        this.roofs.setColorAt(nh, col);
-        nh++;
+        if (o >= 0) { const t = s.tribes[o].color; col.setRGB(t[0] * 0.85, t[1] * 0.85, t[2] * 0.85); } else col.set(0x666666);
+        const k = 2 + (c % 2);
+        for (let i = 0; i < k; i++) {
+          const m = this.m4.multiplyMatrices(base, this.houseOffsets[i]);
+          this.walls.setMatrixAt(nh, m); this.roofs.setMatrixAt(nh, m);
+          this.roofs.setColorAt(nh, col);
+          nh++;
+        }
       } else if (b === BLD.MINE && nm < 3000) {
         this.mines.setMatrixAt(nm++, this.placeMatrix(c, 1));
       }

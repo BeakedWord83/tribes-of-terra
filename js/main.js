@@ -6,7 +6,7 @@ import { Renderer } from './render.js';
 import { UI, randomSeed } from './ui.js';
 
 const params = new URLSearchParams(location.search);
-const TICKS_PER_SPEED = 6; // ticks per second at speed 1
+const TICKS_PER_SPEED = 8; // ticks per second at speed 1
 
 const game = {
   state: null, power: null, hover: -1, selected: null, speed: 1,

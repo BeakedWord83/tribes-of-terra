@@ -7,7 +7,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const rgb = (c) => `rgb(${c.map((v) => Math.round(v * 255)).join(',')})`;
 const fmt = (n) => (n >= 10000 ? (n / 1000).toFixed(0) + 'k' : n >= 1000 ? (n / 1000).toFixed(1) + 'k' : Math.round(n).toString());
-const AGE_ICON = ['🪨', '🥉', '⚔️'];
+const AGE_ICON = ['🪨', '🏺', '🛡️'];
 
 export class UI {
   constructor(game) {

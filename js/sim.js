@@ -19,7 +19,7 @@ export function createSim(world, seed, opts = {}) {
   const n = opts.tribes ?? 5 + state.rng.int(4);
   const placed = [];
   for (let i = 0; i < n; i++) {
-    const cell = findStartCell(state, placed, 0.45);
+    const cell = findStartCell(state, placed, 0.36);
     if (cell < 0) break;
     placed.push(cell);
     spawnTribe(state, cell, { quiet: true });
@@ -258,7 +258,7 @@ function economy(state, t) {
     t.food = 0;
   } else if (t.food > t.pop * 0.2) {
     const room = 1 - t.pop / t.housing;
-    t.pop += t.pop * 0.025 * (t.blessed > 0 ? 1.6 : 1) * room;
+    t.pop += t.pop * 0.03 * (t.blessed > 0 ? 1.6 : 1) * room;
   }
   if (t.plague > 0) {
     t.plague--;
@@ -277,9 +277,9 @@ function economy(state, t) {
   else if (mines.length < 1 + t.pop / 70 && t.wood >= 8 && buildMine(state, t)) t.wood -= 8;
 
   // Expand the borders
-  const want = 10 + t.pop * 0.45;
+  const want = 16 + t.pop * 0.5;
   if (cellsN < want && t.wood >= 2) {
-    const got = expand(state, t, Math.min(3, 1 + Math.floor(t.wood / 40)));
+    const got = expand(state, t, Math.min(3, 2 + Math.floor(t.wood / 60)));
     t.wood -= got * 2;
   }
 
