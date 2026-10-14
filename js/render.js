@@ -355,21 +355,27 @@ export class Renderer {
   // ------------------------------------------------------------ effects
   playMeteor(cell, onImpact) {
     const target = this.cellPos(cell);
-    const side = new THREE.Vector3().randomDirection().cross(target).normalize();
-    const start = target.clone().normalize().multiplyScalar(3.2).add(side.multiplyScalar(1.4));
-    const rock = new THREE.Mesh(new THREE.IcosahedronGeometry(0.03, 0), new THREE.MeshBasicMaterial({ color: 0xffb040 }));
-    const glow = new THREE.Mesh(new THREE.IcosahedronGeometry(0.055, 0), new THREE.MeshBasicMaterial({ color: 0xff4400, transparent: true, opacity: 0.5 }));
+    // Come in from the top corner of the current view, so the player sees the fall.
+    const camRight = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
+    const camUp = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 1);
+    const dist = this.camera.position.distanceTo(target);
+    const start = target.clone()
+      .add(camRight.multiplyScalar((Math.random() < 0.5 ? -0.32 : 0.32) * dist))
+      .add(camUp.multiplyScalar(0.26 * dist))
+      .add(target.clone().normalize().multiplyScalar(0.25 * dist));
+    const rock = new THREE.Mesh(new THREE.IcosahedronGeometry(0.05, 0), new THREE.MeshBasicMaterial({ color: 0xffd060 }));
+    const glow = new THREE.Mesh(new THREE.IcosahedronGeometry(0.09, 0), new THREE.MeshBasicMaterial({ color: 0xff4400, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false }));
     rock.add(glow);
     this.scene.add(rock);
     const trail = [];
     this.anims.push({
       t: 0, dur: 1.3,
       step: (k) => {
-        const e = k * k;
+        const e = Math.pow(k, 1.6);
         rock.position.lerpVectors(start, target, e);
         rock.rotation.x += 0.3; rock.rotation.y += 0.2;
-        if (trail.length < 40) {
-          const puff = new THREE.Mesh(new THREE.IcosahedronGeometry(0.02 + Math.random() * 0.02, 0), new THREE.MeshBasicMaterial({ color: Math.random() < 0.5 ? 0xff7a1a : 0x6b6b6b, transparent: true, opacity: 0.8 }));
+        if (trail.length < 60) {
+          const puff = new THREE.Mesh(new THREE.IcosahedronGeometry(0.03 + Math.random() * 0.035, 0), new THREE.MeshBasicMaterial({ color: Math.random() < 0.7 ? 0xff7a1a : 0xffd27a, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false }));
           puff.position.copy(rock.position);
           this.scene.add(puff); trail.push(puff);
         }
@@ -387,7 +393,7 @@ export class Renderer {
   }
 
   flash(pos, size, color, dur) {
-    const m = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9 }));
+    const m = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
     m.position.copy(pos);
     m.scale.setScalar(0.01);
     this.scene.add(m);
@@ -467,12 +473,12 @@ export class Renderer {
     const rain = wx.type === 'rain';
     const chord = Math.sin(wx.r);
     if (rain) {
-      const mat = new THREE.MeshLambertMaterial({ color: 0xc8ccd6, flatShading: true });
-      for (let i = 0; i < 26; i++) {
+      const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x9aa0b8, flatShading: true, transparent: true, opacity: 0.78, depthWrite: false });
+      for (let i = 0; i < 22; i++) {
         const box = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), mat);
         const a = Math.random() * Math.PI * 2, d = Math.sqrt(Math.random()) * chord * 0.9;
         box.position.set(Math.cos(a) * d, 1.17 + Math.random() * 0.02, Math.sin(a) * d);
-        box.scale.set(0.03 + Math.random() * 0.05, 0.015 + Math.random() * 0.012, 0.03 + Math.random() * 0.05);
+        box.scale.set(0.025 + Math.random() * 0.04, 0.014 + Math.random() * 0.01, 0.025 + Math.random() * 0.04);
         group.add(box);
       }
     } else {
@@ -481,7 +487,7 @@ export class Renderer {
       ring.position.y = 1.1;
       group.add(ring);
     }
-    const n = rain ? 260 : 90;
+    const n = rain ? 500 : 90;
     const pos = new Float32Array(n * 3), seeds = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2, d = Math.sqrt(Math.random()) * chord * 0.9;
@@ -489,7 +495,7 @@ export class Renderer {
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    const pts = new THREE.Points(g, new THREE.PointsMaterial({ color: rain ? 0x7fb8ff : 0xffc060, size: rain ? 2 : 2, sizeAttenuation: false, transparent: true, opacity: 0.9 }));
+    const pts = new THREE.Points(g, new THREE.PointsMaterial({ color: rain ? 0xa8d8ff : 0xffc060, size: 2, sizeAttenuation: false, transparent: true, opacity: 0.9 }));
     pts.frustumCulled = false;
     group.add(pts);
     group.quaternion.copy(q);

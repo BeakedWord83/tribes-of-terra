@@ -35,7 +35,9 @@ const game = {
   usePower(id, cell, done) {
     if (cell < 0) return;
     if (id === 'meteor') {
+      const st = this.state;
       this.renderer.playMeteor(cell, () => {
+        if (this.state !== st) return; // world was replaced mid-flight
         const r = applyPower(this.state, id, cell);
         this.ui.toast(r.msg);
         this.renderer.sync();

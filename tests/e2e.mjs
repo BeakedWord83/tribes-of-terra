@@ -196,12 +196,18 @@ async function main() {
   // ============================================================ 3. inspector hover
   try {
     await page.mouse.move(10, 400);
-    await sleep(200);
+    // wait for drag inertia (damping) to settle so hover and inspector agree
+    let prev = null;
+    for (let i = 0; i < 40; i++) {
+      const p = JSON.stringify(await ev(() => game.renderer.camera.position.toArray().map((v) => +v.toFixed(4))));
+      if (p === prev) break;
+      prev = p; await sleep(250);
+    }
     await mouseTo(W / 2, H_ / 2);
-    await sleep(500);
+    await sleep(700);
     const r = await ev(async () => {
       const { BIOME_NAMES } = await import(new URL('js/world.js', location.href).href);
-      const c = game.pick(innerWidth / 2, innerHeight / 2);
+      const c = game.hover;
       return { c, expect: BIOME_NAMES[game.state.world.biome[c]], title: document.querySelector('#inspect .title')?.textContent || '', text: document.getElementById('inspect').innerText, names: BIOME_NAMES };
     });
     check('3 hover shows biome name in #inspect', r.c >= 0 && r.title.includes(r.expect), `cell=${r.c} expected "${r.expect}" got title="${r.title}"`);

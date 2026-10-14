@@ -516,3 +516,42 @@ test('determinism: powers applied identically give identical results', () => {
   assert.equal(worldHash(a.world), worldHash(b.world));
   assert.deepEqual(a.tribes.map((t) => t.pop), b.tribes.map((t) => t.pop));
 });
+
+// Regression: a meteor that turns owned land into a crater lake must free those cells.
+test('invariant: no water cell is ever owned (meteor craters, long runs, all powers)', () => {
+  const ownedWater = (w) => { let n = 0; for (let c = 0; c < w.count; c++) if (w.owner[c] >= 0 && isWater(w.biome[c])) n++; return n; };
+  const ownerSetsMatch = (s) => {
+    const w = s.world;
+    for (const t of s.tribes) for (const c of t.cells) if (w.owner[c] !== t.id) return false;
+    for (let c = 0; c < w.count; c++) if (w.owner[c] >= 0 && !s.tribes[w.owner[c]].cells.has(c)) return false;
+    return true;
+  };
+  for (const seed of ['42', '7']) {
+    const w = generateWorld(seed);
+    const s = createSim(w, seed);
+    for (let i = 0; i < 150; i++) step(s);
+    // Low coastal owned cells: a meteor here digs below sea level
+    const targets = [];
+    for (let c = 0; c < w.count && targets.length < 6; c++) {
+      if (w.owner[c] >= 0 && w.level[c] <= 2 && !isWater(w.biome[c])) targets.push(c);
+    }
+    assert.ok(targets.length > 0, 'found low owned land');
+    let lakes = 0;
+    for (const c of targets) {
+      applyPower(s, 'meteor', c);
+      if (isWater(w.biome[c])) lakes++;
+      assert.equal(ownedWater(w), 0, `owned water after meteor at ${c}`);
+      assert.ok(ownerSetsMatch(s), 'tribe.cells matches owner[]');
+    }
+    assert.ok(lakes > 0, 'at least one crater became a lake');
+    const powers = ['rain', 'drought', 'forest', 'quake', 'plague', 'bless', 'tribe', 'meteor'];
+    for (let i = 0; i < 600; i++) {
+      step(s);
+      if (i % 40 === 0) applyPower(s, powers[(i / 40) % powers.length], s.rng.int(w.count));
+      if (i % 50 === 0) {
+        assert.equal(ownedWater(w), 0, `owned water at step ${i}`);
+        assert.ok(ownerSetsMatch(s), `owner sets match at step ${i}`);
+      }
+    }
+  }
+});

@@ -1,7 +1,7 @@
 // God powers. Each one takes the sim state and a target cell.
 // Returns { ok, msg }. No DOM.
 import { B, BLD, isWater, classify, maxTrees, cellsWithin, angleBetween, MAX_LEVEL } from './world.js';
-import { spawnTribe, addLog, pushFx, ignite, AGES } from './sim.js';
+import { spawnTribe, addLog, pushFx, ignite, setOwner, AGES } from './sim.js';
 
 export const POWERS = [
   { id: 'tribe', name: 'Spawn Tribe', icon: '👣', radius: 0.065, desc: 'Plant a new people on land.' },
@@ -68,7 +68,7 @@ const HANDLERS = {
           const drop = Math.round(4 * (1 - d * d)) + 1;
           const L = Math.max(0, w.level[c] - drop);
           w.level[c] = L;
-          if (L === 0) { w.raw[c] = w.sea - 0.01; classify(w, c); }
+          if (L === 0) { w.raw[c] = w.sea - 0.01; classify(w, c); setOwner(state, c, -1); }
           else { classify(w, c); w.biome[c] = B.SCORCHED; w.fert[c] = 0.05; w.scorch[c] = 120 + rng.int(80); state.scorched.add(c); }
         }
       } else if (hitWater) {
