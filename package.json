@@ -1,0 +1,1 @@
+{"name":"tribes-of-terra","private":true,"type":"module","scripts":{"test":"node tests/sim.test.mjs","e2e":"node tests/e2e.mjs"},"devDependencies":{"playwright":"^1.64.0"}}
