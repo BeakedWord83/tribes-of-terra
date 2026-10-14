@@ -363,12 +363,12 @@ async function main() {
     await ev(() => game.setSpeed(0));
     await sleep(200);
     const d0 = await ev(() => ({ tick: game.state.tick, date: document.getElementById('date').textContent }));
-    await clickBtn('#speed [data-speed="10"]');
-    const on = await ev(() => document.querySelector('#speed [data-speed="10"]').classList.contains('on') && game.speed === 10);
+    await clickBtn('#speed [data-speed="8"]');
+    const on = await ev(() => document.querySelector('#speed [data-speed="8"]').classList.contains('on') && game.speed === 8);
     await sleep(5000);
     const d1 = await ev(() => ({ tick: game.state.tick, date: document.getElementById('date').textContent }));
     await shot(page, '08-sim-running');
-    check('8a 10x button sets speed 10', on);
+    check('8a fastest button sets speed 8', on);
     check('8b tick advanced > 100 in 5s', d1.tick - d0.tick > 100, `tick ${d0.tick} -> ${d1.tick} (+${d1.tick - d0.tick})`);
     check('8c #date text changed', d1.date !== d0.date, `"${d0.date}" -> "${d1.date}"`);
     await clickBtn('#speed [data-speed="0"]');
