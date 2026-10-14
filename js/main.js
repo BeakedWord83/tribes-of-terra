@@ -1,9 +1,9 @@
 // Wires world, sim, renderer and UI together and runs the game loop.
-import { generateWorld, worldHash } from './world.js?v=mv80zrn6';
-import { createSim, step } from './sim.js?v=mv80zrn6';
-import { applyPower, POWERS, POWER_BY_ID } from './powers.js?v=mv80zrn6';
-import { Renderer } from './render.js?v=mv80zrn6';
-import { UI, randomSeed } from './ui.js?v=mv80zrn6';
+import { generateWorld, worldHash } from './world.js?v=mv81kvff';
+import { createSim, step } from './sim.js?v=mv81kvff';
+import { applyPower, POWERS, POWER_BY_ID } from './powers.js?v=mv81kvff';
+import { Renderer } from './render.js?v=mv81kvff';
+import { UI, randomSeed } from './ui.js?v=mv81kvff';
 
 const params = new URLSearchParams(location.search);
 const TICKS_PER_SPEED = 4; // ticks per second at speed 1
@@ -115,6 +115,7 @@ game.setSpeed(params.has('speed') ? +params.get('speed') : 1);
 // --- loop
 let last = performance.now(), acc = 0, syncT = 0, uiT = 0, dirty = false;
 function loop(now) {
+  requestAnimationFrame(loop); // schedule first: one bad frame must never stop the game
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
   acc += dt * game.speed * TICKS_PER_SPEED;
@@ -126,6 +127,5 @@ function loop(now) {
   if (uiT > 0.3) { game.ui.update(); uiT = 0; }
   game.renderer.frame(dt);
   game.ui.updateLabels();
-  requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);

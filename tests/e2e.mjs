@@ -559,17 +559,26 @@ async function main() {
   // ============================================================ 15. meteor into a forest -> wildfire you can see
   try {
     await load('?seed=7&rotate=0&speed=0');
-    // a spot in the middle of a big forest (most tiles within ~0.25 rad are wooded)
-    const tgt = await ev(() => __H.find((c, w) => {
-      if (w.owner[c] >= 0 || w.biome[c] !== 5 || w.trees[c] < 0.7) return false;
-      let n = 0, wood = 0;
-      const cos = Math.cos(0.25);
-      for (let i = 0; i < w.count; i++) {
-        if (w.center[i * 3] * w.center[c * 3] + w.center[i * 3 + 1] * w.center[c * 3 + 1] + w.center[i * 3 + 2] * w.center[c * 3 + 2] < cos) continue;
-        n++; if (w.trees[i] > 0.4) wood++;
+    // the densest big forest on the whole globe; fly there, then click it like a player
+    const spot = await ev(() => {
+      const w = game.state.world;
+      let best = -1, bv = 0;
+      for (let c = 0; c < w.count; c += 5) {
+        if (w.owner[c] >= 0 || w.biome[c] !== 5 || w.trees[c] < 0.7) continue;
+        let wood = 0;
+        const cos = Math.cos(0.25);
+        for (let i = 0; i < w.count; i += 3) {
+          if (w.center[i * 3] * w.center[c * 3] + w.center[i * 3 + 1] * w.center[c * 3 + 1] + w.center[i * 3 + 2] * w.center[c * 3 + 2] < cos) continue;
+          if (w.trees[i] > 0.4) wood++;
+        }
+        if (wood > bv) { bv = wood; best = c; }
       }
-      return wood / n > 0.6;
-    }, { minDot: 0.75 }));
+      game.renderer.flyTo(best, 2.6);
+      return best;
+    });
+    await settle();
+    const tgt = await ev((sp) => __H.find((c, w) => c === sp || (w.biome[c] === 5 && w.trees[c] > 0.6 && w.owner[c] < 0
+      && Math.acos(Math.min(1, w.center[c * 3] * w.center[sp * 3] + w.center[c * 3 + 1] * w.center[sp * 3 + 1] + w.center[c * 3 + 2] * w.center[sp * 3 + 2])) < 0.04), { minDot: 0.5 }), spot);
     if (!tgt) throw new Error('no visible forest cell');
     await ev(([x, y]) => __H.snap('f0', x - 120, y - 120, x + 120, y + 120), [tgt.x, tgt.y]);
     const orange = (name) => ev((n) => { const d = __H.snaps[n].data; let k = 0; for (let i = 0; i < d.length; i += 4) if (d[i] > 200 && d[i + 1] > 60 && d[i + 1] < 200 && d[i + 2] < 90) k++; return k; }, name);
@@ -667,6 +676,133 @@ async function main() {
     });
     check('16e rain storms show lightning', bolts > 0, `lightning bolts seen=${bolts}`);
   } catch (e) { check('16 power effects', false, e.message); }
+
+  // ============================================================ 17. regression: zoom out after clicking a tribe
+  try {
+    await load('?seed=42&rotate=0&speed=0');
+    await page.click('#tribelist .tribe');
+    await settle();
+    const d0 = await ev(() => game.renderer.camera.position.length());
+    await page.mouse.move(W / 2, H_ / 2);
+    for (let i = 0; i < 25; i++) { await page.mouse.wheel(0, 300); await sleep(40); }
+    await settle();
+    const d1 = await ev(() => game.renderer.camera.position.length());
+    check('17a after clicking a tribe, scrolling zooms back out', d0 < 1.6 && d1 > 4, `distance ${d0.toFixed(2)} -> ${d1.toFixed(2)}`);
+    for (let i = 0; i < 25; i++) { await page.mouse.wheel(0, -300); await sleep(40); }
+    await settle();
+    const c0 = await ev(() => game.renderer.camera.position.toArray());
+    await page.mouse.move(W / 2 - 120, H_ / 2); await page.mouse.down();
+    await page.mouse.move(W / 2 + 120, H_ / 2, { steps: 10 }); await page.mouse.up();
+    await settle();
+    const c1 = await ev(() => game.renderer.camera.position.toArray());
+    const dd = await ev(() => game.renderer.camera.position.length());
+    check('17b drag still rotates when zoomed close', Math.hypot(...c0.map((v, i) => v - c1[i])) > 0.02, `close dist=${dd.toFixed(2)} moved=${Math.hypot(...c0.map((v, i) => v - c1[i])).toFixed(3)}`);
+  } catch (e) { check('17 zoom after tribe click', false, e.message); }
+
+  // ============================================================ 18. borders + map-style tribe names
+  try {
+    await load('?seed=42&rotate=0&speed=0');
+    await ev(() => { game.step(400); game.renderer.terrT = 0; game.renderer.sync(); });
+    await sleep(800);
+    const b = await ev(() => {
+      const w = game.state.world, R = game.renderer;
+      let edges = 0;
+      for (let c = 0; c < w.count; c++) {
+        if (w.owner[c] < 0) continue;
+        for (let k = 0; k < 3; k++) { const n = R.edgeNbr[c * 3 + k]; if (n >= 0 && w.owner[n] !== w.owner[c] && w.biome[n] > 2) edges++; }
+      }
+      return { edges, verts: R.borderMesh.geometry.attributes.position.count };
+    });
+    check('18a every land border edge gets a line + colour band', b.edges > 20 && b.verts === b.edges * 12, `border edges=${b.edges} vertices=${b.verts} (expect ${b.edges * 12})`);
+    // change an owner -> borders follow
+    const b2 = await ev(() => {
+      const w = game.state.world, s = game.state;
+      const t = s.tribes.filter((t) => t.alive).sort((a, b) => b.cells.size - a.cells.size)[0];
+      let target = -1;
+      for (const c of t.cells) { for (let k = 0; k < 3; k++) { const n = w.nbr[c * 3 + k]; if (w.owner[n] < 0 && w.biome[n] > 2) { target = n; break; } } if (target >= 0) break; }
+      const before = game.renderer.borderMesh.geometry.attributes.position.count;
+      w.owner[target] = t.id; t.cells.add(target);
+      game.renderer.sync();
+      return { before, after: game.renderer.borderMesh.geometry.attributes.position.count };
+    });
+    check('18b borders update when land changes hands', b2.after !== b2.before, `vertices ${b2.before} -> ${b2.after}`);
+    await shot(page, '18-political-map');
+    const names = await ev(() => {
+      const R = game.renderer, s = game.state;
+      const out = [];
+      for (const [id, T] of R.territories) {
+        const el = [...document.querySelectorAll('#labels .mapname')].find((e) => e.textContent === s.tribes[id].name.toUpperCase());
+        const C = R.projectPoint(T.center);
+        if (!el || !C || el.style.display === 'none' || +el.style.opacity < 0.3) continue;
+        const r = el.getBoundingClientRect();
+        out.push({ name: el.textContent, size: T.size, fs: parseFloat(el.style.fontSize), dx: Math.abs(r.left + r.width / 2 - C.x), dy: Math.abs(r.top + r.height / 2 - C.y) });
+      }
+      return out.sort((a, b) => b.size - a.size);
+    });
+    check('18c zoomed out: tribe names are written across their land', names.length >= 2 && names.every((n) => n.dx < 4 && n.dy < 4),
+      names.map((n) => `${n.name}(${n.size} tiles, ${n.fs.toFixed(0)}px, off ${n.dx.toFixed(1)},${n.dy.toFixed(1)})`).join(' '));
+    // bigger land -> bigger name (compare biggest and smallest visible)
+    const big = names[0], small = names[names.length - 1];
+    check('18d bigger land gets a bigger name', names.length >= 2 && (big.size <= small.size * 1.5 || big.fs > small.fs), `${big?.name} ${big?.fs.toFixed(0)}px vs ${small?.name} ${small?.fs.toFixed(0)}px`);
+    // zoom in: map names fade, capital names show
+    const t = await ev(() => { const t = game.state.tribes.filter((t) => t.alive).sort((a, b) => b.pop - a.pop)[0]; game.renderer.flyTo(t.capital, 1.4); return { id: t.id, name: t.name.toUpperCase() }; });
+    await sleep(1300); // the fly animation lasts 1.1 s
+    await settle();
+    await sleep(300);
+    const z = await ev((t) => {
+      const m = [...document.querySelectorAll('#labels .mapname')].find((e) => e.textContent === t.name);
+      const l = document.querySelector(`#labels .lbl[data-id="${t.id}"]`);
+      return { map: m ? (m.style.display === 'none' ? 0 : +m.style.opacity) : 0, cap: l && l.style.display !== 'none' ? +(l.style.opacity || 1) : 0 };
+    }, t);
+    check('18e zoomed in: map names fade out, capital names show', z.map < 0.05 && z.cap > 0.9, `map name opacity=${z.map} capital label opacity=${z.cap}`);
+  } catch (e) { check('18 borders/names', false, e.message); }
+
+  // ============================================================ 19. regression: no mixed cached files
+  try {
+    const v = await ev(async () => {
+      const main = document.querySelector('script[type=module]').getAttribute('src');
+      const ver = (main.match(/\?v=([\w]+)/) || [])[1];
+      const files = ['js/main.js', 'js/render.js', 'js/sim.js', 'js/world.js', 'js/powers.js', 'js/ui.js', 'js/rng.js', 'vendor/OrbitControls.js'];
+      const bad = [];
+      for (const f of files) {
+        const src = await (await fetch(f + '?check=' + Date.now())).text();
+        for (const m of src.matchAll(/from\s+['"](\.{1,2}\/[^'"]+)['"]/g)) if (!m[1].endsWith('?v=' + ver)) bad.push(f + ': ' + m[1]);
+      }
+      return { ver, bad };
+    });
+    check('19 every module import carries the same version tag as index.html', v.ver && v.bad.length === 0, v.bad.length ? v.bad.slice(0, 4).join(' | ') : `v=${v.ver}`);
+  } catch (e) { check('19 version tags', false, e.message); }
+
+  // ============================================================ 20. regression: label crash when a territory's ends are behind the globe
+  try {
+    await load('?seed=42&rotate=0&speed=0');
+    await ev(() => { game.step(400); game.renderer.terrT = 0; game.renderer.sync(); });
+    const r = await ev(() => {
+      const R = game.renderer, real = R.projectPoint.bind(R);
+      const centers = new Set([...R.territories.values()].map((T) => T.center));
+      R.projectPoint = (v) => (centers.has(v) ? { x: innerWidth / 2, y: innerHeight / 2 } : null); // only the middle visible
+      let err = null;
+      try { game.ui.updateLabels(); } catch (e) { err = e.message; }
+      R.projectPoint = real;
+      return { err, n: centers.size };
+    });
+    check('20a map names survive when both ends of a territory are hidden', r.err === null && r.n > 0, r.err || `territories=${r.n}`);
+    // soak: fast sim + spinning camera for 40 s, the loop must keep running with no errors
+    const e0 = errors.length;
+    await clickBtn('#speed [data-speed="8"]');
+    await ev(() => { game.renderer.controls.autoRotate = true; game.renderer.controls.autoRotateSpeed = 30; });
+    const t0 = await ev(() => game.state.tick);
+    for (let i = 0; i < 8; i++) {
+      await page.mouse.move(W / 2, H_ / 2);
+      await page.mouse.wheel(0, i % 2 ? 900 : -900);
+      await sleep(5000);
+    }
+    const t1 = await ev(() => game.state.tick);
+    const f0 = await ev(() => new Promise((res) => { let n = 0; const f = () => { if (++n < 10) requestAnimationFrame(f); else res(n); }; requestAnimationFrame(f); }));
+    check('20b 40 s of fast play with zoom + spin: no errors, still running', errors.length === e0 && t1 - t0 > 300 && f0 === 10,
+      `ticks +${t1 - t0}, new errors=${errors.slice(e0).join(' | ') || 0}`);
+    await ev(() => { game.renderer.controls.autoRotate = false; game.setSpeed(0); });
+  } catch (e) { check('20 label crash/soak', false, e.message); }
 
   // ============================================================ final
   check('13 no console errors / pageerrors during the whole run', errors.length === 0, errors.slice(0, 5).join(' | '));

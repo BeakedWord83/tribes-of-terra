@@ -1,8 +1,8 @@
 // three.js view of the world: a voxel globe drawn at low resolution
 // and scaled up with hard pixels.
-import * as THREE from '../vendor/three.module.js?v=mv80zrn6';
-import { OrbitControls } from '../vendor/OrbitControls.js?v=mv80zrn6';
-import { B, BLD, isWater, cellsWithin } from './world.js?v=mv80zrn6';
+import * as THREE from '../vendor/three.module.js?v=mv81kvff';
+import { OrbitControls } from '../vendor/OrbitControls.js?v=mv81kvff';
+import { B, BLD, isWater, cellsWithin } from './world.js?v=mv81kvff';
 
 const CELL_TRIS = 7; // 1 top + 3 side quads
 const LEVEL_H = 0.011;
@@ -50,9 +50,17 @@ export class Renderer {
     this.view.add(sun);
     this.scene.add(new THREE.HemisphereLight(0xbfd8ff, 0x302418, 1.1));
     this.addStars();
-    const atmo = new THREE.Mesh(new THREE.SphereGeometry(1.09, 48, 32),
-      new THREE.MeshBasicMaterial({ color: 0x5aa8ff, transparent: true, opacity: 0.13, side: THREE.BackSide, depthWrite: false }));
-    this.scene.add(atmo);
+    // Atmosphere: a soft glow at the edge of the globe (fresnel), plus a thin blue haze over the rim
+    const fres = (power, alpha, side) => new THREE.ShaderMaterial({
+      uniforms: { color: { value: new THREE.Color(0x6ab4ff) } },
+      vertexShader: 'varying vec3 vN; varying vec3 vV; void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); vN = normalize(normalMatrix * normal); vV = normalize(-mv.xyz); gl_Position = projectionMatrix * mv; }',
+      fragmentShader: `uniform vec3 color; varying vec3 vN; varying vec3 vV; void main(){ float d = abs(dot(vN, vV)); float f = ${side === THREE.BackSide ? 'pow(d, 3.0)' : 'pow(1.0 - d, ' + power.toFixed(1) + ')'}; gl_FragColor = vec4(color * f * ${alpha.toFixed(2)}, 1.0); }`,
+      side, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    this.halo = new THREE.Mesh(new THREE.SphereGeometry(1.2, 64, 48), fres(3, 1.15, THREE.BackSide));
+    this.haze = new THREE.Mesh(new THREE.SphereGeometry(1.12, 64, 48), fres(3.5, 0.55, THREE.FrontSide));
+    this.scene.add(this.halo, this.haze);
+    this.makeClouds();
     this.raycaster = new THREE.Raycaster();
     this.tmpColor = new THREE.Color();
     this.tmpColor2 = new THREE.Color();
@@ -66,14 +74,42 @@ export class Renderer {
   }
 
   addStars() {
-    const n = 1500, pos = new Float32Array(n * 3);
-    for (let i = 0; i < n; i++) {
-      const v = new THREE.Vector3().randomDirection().multiplyScalar(60 + Math.random() * 40);
-      pos.set([v.x, v.y, v.z], i * 3);
+    // dim far stars, some bright ones, a few big tinted ones
+    for (const [n, size, cols] of [[1800, 1, [0x5a6080, 0x7a809f, 0x9aa0c0]], [350, 1, [0xffffff, 0xdfe8ff]], [45, 2, [0xfff1c8, 0xc8dcff, 0xffd0d0]]]) {
+      const pos = new Float32Array(n * 3), col = new Float32Array(n * 3), c = new THREE.Color();
+      for (let i = 0; i < n; i++) {
+        const v = new THREE.Vector3().randomDirection().multiplyScalar(60 + Math.random() * 40);
+        pos.set([v.x, v.y, v.z], i * 3);
+        c.setHex(cols[Math.floor(Math.random() * cols.length)]);
+        col.set([c.r, c.g, c.b], i * 3);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      this.scene.add(new THREE.Points(g, new THREE.PointsMaterial({ vertexColors: true, size, sizeAttenuation: false })));
     }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    this.scene.add(new THREE.Points(g, new THREE.PointsMaterial({ color: 0xffffff, size: 1, sizeAttenuation: false })));
+  }
+
+  // Slow drifting pixel clouds high above the ground (hidden when zoomed in)
+  makeClouds() {
+    this.clouds = new THREE.Group();
+    this.cloudMat = new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x8a93a8, transparent: true, opacity: 0.55, depthWrite: false, flatShading: true });
+    const box = new THREE.BoxGeometry(1, 1, 1);
+    const up = new THREE.Vector3(0, 1, 0);
+    for (let i = 0; i < 46; i++) {
+      const dir = new THREE.Vector3().randomDirection();
+      if (Math.abs(dir.y) > 0.85) continue;
+      const q = new THREE.Quaternion().setFromUnitVectors(up, dir);
+      const k = 3 + Math.floor(Math.random() * 4);
+      for (let j = 0; j < k; j++) {
+        const m = new THREE.Mesh(box, this.cloudMat);
+        m.position.set((Math.random() - 0.5) * 0.09, 1.135 + Math.random() * 0.01, (Math.random() - 0.5) * 0.05).applyQuaternion(q);
+        m.quaternion.copy(q);
+        m.scale.set(0.03 + Math.random() * 0.05, 0.005, 0.02 + Math.random() * 0.03);
+        this.clouds.add(m);
+      }
+    }
+    this.scene.add(this.clouds);
   }
 
   // 'auto': chunky pixels far away, sharp when zoomed in. A number: fixed pixel size.
@@ -117,7 +153,7 @@ export class Renderer {
     this.scene.add(this.globe);
     this.version = -1;
     this.jitter = new Float32Array(N);
-    for (let c = 0; c < N; c++) this.jitter[c] = 0.93 + 0.14 * hash01(c);
+    for (let c = 0; c < N; c++) this.jitter[c] = 0.95 + 0.1 * hash01(c);
     this.quat = new Float32Array(N * 4);
     const up = new THREE.Vector3(0, 1, 0), n = new THREE.Vector3(), q = new THREE.Quaternion(), spin = new THREE.Quaternion();
     for (let c = 0; c < N; c++) {
@@ -200,7 +236,7 @@ export class Renderer {
       this.tmpColor.setRGB(t.color[0], t.color[1], t.color[2]);
       // zoomed out = political map: stronger country colours
       const map = this.pixel === 3 ? 1 : this.pixel === 2 ? 0.5 : 0;
-      out.lerp(this.tmpColor, border ? 0.45 + 0.4 * map : bld === BLD.FARM ? 0.15 + 0.2 * map : 0.36 + 0.2 * map);
+      out.lerp(this.tmpColor, border ? 0.3 + 0.55 * map : bld === BLD.FARM ? 0.08 + 0.27 * map : 0.16 + 0.4 * map);
     }
     const hot = this.hot?.get(c);
     if (hot !== undefined && !isWater(b)) {
@@ -1000,6 +1036,17 @@ export class Renderer {
       if (want !== this.pixel) { this.pixel = want; this.resize(); }
     }
     if (this.state && this.borderMesh && this.borderPixel !== this.pixel) this.sync(); // recolour + rebuild borders for the new zoom
+    // Far away = clean map: hide small things (trees, houses...) and show clouds
+    const detail = dist < 2.7;
+    if (this.trees && this.trees.visible !== detail) {
+      for (const m of [this.trees, this.huts, this.walls, this.roofs, this.doors, this.crops, this.mines, this.shafts, this.pits, this.flames, this.poles, this.flags]) m.visible = detail;
+    }
+    this.clouds.rotation.y += dt * 0.006;
+    this.clouds.rotation.x = Math.sin(this.time * 0.01) * 0.05;
+    this.cloudMat.opacity = 0.5 * Math.max(0, Math.min(1, (dist - 1.9) / 0.6));
+    this.clouds.visible = this.cloudMat.opacity > 0.01;
+    this.halo.visible = this.view.position.length() > 1.2;
+    this.haze.visible = this.view.position.length() > 1.16;
     const s = this.state;
     if (s) {
       for (const fx of s.fx) this.handleFx(fx);

@@ -1,7 +1,7 @@
 // DOM panels: powers, tribes, chronicle, inspector, toast.
-import { BIOME_NAMES, BLD_NAMES, isWater } from './world.js?v=mv80zrn6';
-import { AGES, yearOf, fertEff, strength } from './sim.js?v=mv80zrn6';
-import { POWERS } from './powers.js?v=mv80zrn6';
+import { BIOME_NAMES, BLD_NAMES, isWater } from './world.js?v=mv81kvff';
+import { AGES, yearOf, fertEff, strength } from './sim.js?v=mv81kvff';
+import { POWERS } from './powers.js?v=mv81kvff';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -99,14 +99,16 @@ export class UI {
         const edge = Math.max(0, Math.min(1, (face - 0.35) / 0.25));
         if (C && edge > 0.02) {
           const A = r.projectPoint(T.A), B = r.projectPoint(T.B), M1 = r.projectPoint(T.M1), M2 = r.projectPoint(T.M2);
-          const len = A && B ? Math.hypot(B.x - A.x, B.y - A.y) : 2 * Math.hypot(((A || B).x - C.x), ((A || B).y - C.y));
+          // Ends of the land can be behind the globe while the middle is visible
+          const end = A || B;
+          const len = A && B ? Math.hypot(B.x - A.x, B.y - A.y) : end ? 2 * Math.hypot(end.x - C.x, end.y - C.y) : 0;
           const thick = M1 && M2 ? Math.hypot(M2.x - M1.x, M2.y - M1.y) : len * 0.3;
           let ang = A && B ? Math.atan2(B.y - A.y, B.x - A.x) : 0;
           if (ang > Math.PI / 2) ang -= Math.PI; else if (ang < -Math.PI / 2) ang += Math.PI;
           const name = t.name.toUpperCase();
-          // VT323: ~0.5em per letter + 0.3em spacing
-          const fs = Math.min((len * 0.9) / (name.length * 0.8), Math.max(thick * 0.75, 12), 120);
-          if (fs >= 11) {
+          // Pixelify Sans bold: ~0.62em per letter + 0.12em spacing; never smaller than readable
+          const fs = Math.max(17, Math.min((len * 0.95) / (name.length * 0.74), Math.max(thick * 0.95, 17), 76));
+          if (len > 0) {
             if (!m) {
               m = document.createElement('div');
               m.className = 'mapname';
@@ -114,10 +116,11 @@ export class UI {
               this.mapEls.set(t.id, m);
             }
             if (m.textContent !== name) m.textContent = name;
-            const c = t.color.map((v) => Math.round(Math.min(255, v * 255 * 0.3 + 178)));
+            const c = t.color.map((v) => Math.round(Math.min(255, v * 255 * 0.22 + 205)));
             m.style.color = `rgb(${c.join(',')})`;
+            m.style.setProperty('--glow', rgb(t.color));
             m.style.fontSize = fs.toFixed(1) + 'px';
-            m.style.opacity = (0.92 * mapAlpha * edge).toFixed(2);
+            m.style.opacity = (mapAlpha * edge).toFixed(2);
             m.style.transform = `translate(${Math.round(C.x)}px, ${Math.round(C.y)}px) translate(-50%, -50%) rotate(${ang.toFixed(3)}rad)`;
             m.style.display = '';
             mapShown = true;
@@ -134,7 +137,8 @@ export class UI {
         el = document.createElement('div');
         el.className = 'lbl';
         el.dataset.id = t.id;
-        el.style.color = rgb(t.color);
+        el.style.color = `rgb(${t.color.map((v) => Math.round(Math.min(255, v * 255 * 0.3 + 180))).join(',')})`;
+        el.style.setProperty('--glow', rgb(t.color));
         $('labels').appendChild(el);
         this.labelEls.set(t.id, el);
       }
@@ -176,15 +180,17 @@ export class UI {
     const sel = this.game.selected;
     $('tribelist').innerHTML = [...sorted, ...dead].map((t) => {
       const tags = [];
-      if (t.enemies.size) tags.push(`⚔️${t.enemies.size}`);
-      if (t.allies.size) tags.push(`🤝${t.allies.size}`);
-      if (t.plague > 0) tags.push('☠️');
-      if (t.blessed > 0) tags.push('✨');
-      return `<div class="tribe${t.alive ? '' : ' dead'}${t.id === sel ? ' sel' : ''}" data-id="${t.id}">
+      const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+      if (t.enemies.size) tags.push(`<span class="tag war" title="At war with ${t.enemies.size} tribe(s)">⚔️ ${plural(t.enemies.size, 'war', 'wars')}</span>`);
+      if (t.allies.size) tags.push(`<span class="tag ally" title="Allied with ${t.allies.size} tribe(s)">🤝 ${plural(t.allies.size, 'ally', 'allies')}</span>`);
+      if (t.plague > 0) tags.push('<span class="tag sick" title="This tribe has the plague">☠️ plague</span>');
+      if (t.blessed > 0) tags.push('<span class="tag blessed" title="Blessed by the gods">✨ blessed</span>');
+      if (!t.alive) tags.push('<span class="tag">fallen</span>');
+      return `<div class="tribe${t.alive ? '' : ' dead'}${t.id === sel ? ' sel' : ''}" data-id="${t.id}" title="Click to fly to the ${esc(t.name)}">
         <div class="sw" style="background:${rgb(t.color)}"></div>
         <div class="nm">${esc(t.name)}</div>
-        <div class="tags">${t.alive ? tags.join(' ') : 'fallen'}</div>
-        <div class="st">${AGE_ICON[t.tech]} pop ${fmt(t.pop)} · land ${t.cells.size}</div>
+        <div class="tags">${tags.join('')}</div>
+        <div class="st">${t.alive ? `${AGE_ICON[t.tech]} ${AGES[t.tech]} · <b>${fmt(t.pop)}</b> people · <b>${t.cells.size}</b> tiles` : 'Gone from the world'}</div>
       </div>`;
     }).join('');
   }
@@ -206,11 +212,13 @@ export class UI {
       $('inspect').innerHTML = `
         <div class="title" style="color:${rgb(t.color)}">The ${esc(t.name)} ${t.alive ? '' : '(fallen)'}</div>
         <div class="row"><b>Age</b><span>${AGE_ICON[t.tech]} ${AGES[t.tech]}</span></div>
-        <div class="row"><b>People</b><span>${fmt(t.pop)} / ${fmt(t.housing)} homes</span></div>
+        <div class="row"><b>People</b><span>${fmt(t.pop)} (homes for ${fmt(t.housing)})</span></div>
         <div class="row"><b>Land</b><span>${t.cells.size} tiles</span></div>
-        <div class="row"><b>Food</b><span>${fmt(t.food)} (${t.foodRate >= 0 ? '+' : ''}${t.foodRate.toFixed(1)}/mo)</span></div>
-        <div class="row"><b>Wood · Stone · Ore</b><span>${fmt(t.wood)} · ${fmt(t.stone)} · ${fmt(t.ore)}</span></div>
-        <div class="row"><b>Army</b><span>${fmt(t.soldiers)} (power ${fmt(strength(t))})</span></div>
+        <div class="row"><b>Food</b><span>${fmt(t.food)} (${t.foodRate >= 0 ? '+' : ''}${t.foodRate.toFixed(1)} per month)</span></div>
+        <div class="row"><b>Wood</b><span>${fmt(t.wood)}</span></div>
+        <div class="row"><b>Stone</b><span>${fmt(t.stone)}</span></div>
+        <div class="row"><b>Ore</b><span>${fmt(t.ore)}</span></div>
+        <div class="row"><b>Army</b><span>${fmt(t.soldiers)} soldiers (strength ${fmt(strength(t))})</span></div>
         <div class="row"><b>Temper</b><span>${t.aggression > 0.7 ? 'Warlike' : t.aggression > 0.4 ? 'Proud' : 'Peaceful'}</span></div>
         <div class="row"><b>Allies</b><span>${names(t.allies)}</span></div>
         <div class="row"><b>At war with</b><span>${names(t.enemies)}</span></div>
@@ -233,7 +241,8 @@ export class UI {
       <div class="row"><b>Building</b><span>${BLD_NAMES[w.bld[c]]}</span></div>
       <div class="row"><b>Trees</b><span>${Math.round(w.trees[c] * 100)}%</span></div>${bar(w.trees[c], '#2f7a2a')}
       <div class="row"><b>Fertility</b><span>${Math.round(fertEff(w, c) * 100)}%</span></div>${bar(fertEff(w, c), '#d9b443')}
-      <div class="row"><b>Stone · Ore</b><span>${Math.round(w.stone[c] * 100)}% · ${Math.round(w.ore[c] * 100)}%</span></div>`}
+      <div class="row"><b>Stone</b><span>${Math.round(w.stone[c] * 100)}%</span></div>
+      <div class="row"><b>Ore</b><span>${Math.round(w.ore[c] * 100)}%</span></div>`}
       <div class="row"><b>Weather</b><span>${weather}</span></div>`;
   }
 }
