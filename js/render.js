@@ -1,8 +1,8 @@
 // three.js view of the world: a voxel globe drawn at low resolution
 // and scaled up with hard pixels.
-import * as THREE from '../vendor/three.module.js';
-import { OrbitControls } from '../vendor/OrbitControls.js';
-import { B, BLD, isWater, cellsWithin } from './world.js';
+import * as THREE from '../vendor/three.module.js?v=mv80qc5d';
+import { OrbitControls } from '../vendor/OrbitControls.js?v=mv80qc5d';
+import { B, BLD, isWater, cellsWithin } from './world.js?v=mv80qc5d';
 
 const CELL_TRIS = 7; // 1 top + 3 side quads
 const LEVEL_H = 0.011;
