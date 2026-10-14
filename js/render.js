@@ -1,8 +1,8 @@
 // three.js view of the world: a voxel globe drawn at low resolution
 // and scaled up with hard pixels.
-import * as THREE from '../vendor/three.module.js?v=mv80ti6g';
-import { OrbitControls } from '../vendor/OrbitControls.js?v=mv80ti6g';
-import { B, BLD, isWater, cellsWithin } from './world.js?v=mv80ti6g';
+import * as THREE from '../vendor/three.module.js?v=mv80zrn6';
+import { OrbitControls } from '../vendor/OrbitControls.js?v=mv80zrn6';
+import { B, BLD, isWater, cellsWithin } from './world.js?v=mv80zrn6';
 
 const CELL_TRIS = 7; // 1 top + 3 side quads
 const LEVEL_H = 0.011;
@@ -106,6 +106,7 @@ export class Renderer {
       for (const o of this.weatherObjs?.values() || []) this.scene.remove(o.group);
     }
     this.weatherObjs = new Map();
+    this.terrT = 0;
     const N = w.count;
     const geo = new THREE.BufferGeometry();
     this.posAttr = new THREE.BufferAttribute(new Float32Array(N * CELL_TRIS * 9), 3);
@@ -197,7 +198,9 @@ export class Renderer {
       let border = false;
       for (let k = 0; k < 3; k++) if (w.owner[w.nbr[c * 3 + k]] !== own) border = true;
       this.tmpColor.setRGB(t.color[0], t.color[1], t.color[2]);
-      out.lerp(this.tmpColor, border ? 0.7 : bld === BLD.FARM ? 0.12 : 0.28);
+      // zoomed out = political map: stronger country colours
+      const map = this.pixel === 3 ? 1 : this.pixel === 2 ? 0.5 : 0;
+      out.lerp(this.tmpColor, border ? 0.45 + 0.4 * map : bld === BLD.FARM ? 0.15 + 0.2 * map : 0.36 + 0.2 * map);
     }
     const hot = this.hot?.get(c);
     if (hot !== undefined && !isWater(b)) {
@@ -229,6 +232,9 @@ export class Renderer {
     for (let c = 0; c < w.count; c++) this.writeCellColor(c, this.cellColor(c, col));
     this.colAttr.needsUpdate = true;
     this.syncInstances();
+    this.buildBorders();
+    const now = performance.now();
+    if (!this.terrT || now - this.terrT > 700) { this.computeTerritories(); this.terrT = now; }
   }
 
   // ------------------------------------------------------------ instances
@@ -649,6 +655,118 @@ export class Renderer {
     this.anims.push({ t: 0, dur: 0.25, step: (k) => { line.material.opacity = 1 - k; }, done: () => this.scene.remove(line) });
   }
 
+  // ------------------------------------------------------------ borders + territory shapes
+  // A dark line on every land edge where the owner changes, with a band of the tribe's colour inside it.
+  buildBorders() {
+    const s = this.state, w = s.world;
+    if (!this.borderMesh) {
+      this.borderMesh = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({
+        vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+      }));
+      this.borderMesh.frustumCulled = false;
+      this.scene.add(this.borderMesh);
+    }
+    const band = this.pixel === 3 ? 0.8 : this.pixel === 2 ? 0.5 : 0.3; // wider when far away
+    const line = band * 0.28;
+    const pos = [], col = [];
+    const V = (vi, r) => [w.vertPos[vi * 3] * r, w.vertPos[vi * 3 + 1] * r, w.vertPos[vi * 3 + 2] * r];
+    const lerp = (a, b, k) => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
+    const quad = (a, b, c, d, rgb) => {
+      pos.push(...a, ...b, ...c, ...a, ...c, ...d);
+      for (let i = 0; i < 6; i++) col.push(rgb[0], rgb[1], rgb[2]);
+    };
+    for (let c = 0; c < w.count; c++) {
+      const o = w.owner[c];
+      if (o < 0) continue;
+      let any = false;
+      for (let k = 0; k < 3; k++) {
+        const n = this.edgeNbr[c * 3 + k];
+        if (n >= 0 && w.owner[n] !== o && !isWater(w.biome[n])) { any = true; break; }
+      }
+      if (!any) continue;
+      const t = s.tribes[o];
+      const bright = [Math.min(1, t.color[0] * 1.15 + 0.08), Math.min(1, t.color[1] * 1.15 + 0.08), Math.min(1, t.color[2] * 1.15 + 0.08)];
+      const dark = [t.color[0] * 0.18, t.color[1] * 0.18, t.color[2] * 0.18];
+      const r = topRadius(w.level[c]) + 0.0012;
+      const vs = [0, 1, 2].map((k) => V(w.cellVerts[c * 3 + k], r));
+      const C = [(vs[0][0] + vs[1][0] + vs[2][0]) / 3, (vs[0][1] + vs[1][1] + vs[2][1]) / 3, (vs[0][2] + vs[1][2] + vs[2][2]) / 3];
+      for (let k = 0; k < 3; k++) {
+        const n = this.edgeNbr[c * 3 + k];
+        if (n < 0 || w.owner[n] === o || isWater(w.biome[n])) continue;
+        const a = vs[k], b = vs[(k + 1) % 3];
+        const a1 = lerp(a, C, line), b1 = lerp(b, C, line), a2 = lerp(a, C, band), b2 = lerp(b, C, band);
+        quad(a, b, b1, a1, dark);
+        quad(a1, b1, b2, a2, bright);
+      }
+    }
+    const g = this.borderMesh.geometry;
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    g.computeBoundingSphere();
+    this.borderPixel = this.pixel;
+  }
+
+  // For each tribe: its biggest connected piece of land, the centre, and the long axis.
+  // Used to write the tribe's name across its land like a world map.
+  computeTerritories() {
+    const s = this.state, w = s.world;
+    const seen = new Uint8Array(w.count);
+    const out = new Map();
+    for (const t of s.tribes) {
+      if (!t.alive || t.cells.size < 12) continue;
+      let best = null;
+      for (const start of t.cells) {
+        if (seen[start]) continue;
+        const comp = [start];
+        seen[start] = 1;
+        for (let i = 0; i < comp.length; i++) {
+          const c = comp[i];
+          for (let k = 0; k < 3; k++) {
+            const n = w.nbr[c * 3 + k];
+            if (!seen[n] && w.owner[n] === t.id) { seen[n] = 1; comp.push(n); }
+          }
+        }
+        if (!best || comp.length > best.length) best = comp;
+      }
+      if (!best || best.length < 12) continue;
+      const u = new THREE.Vector3();
+      for (const c of best) u.x += w.center[c * 3], u.y += w.center[c * 3 + 1], u.z += w.center[c * 3 + 2];
+      u.normalize();
+      const e1 = new THREE.Vector3(0, 1, 0).cross(u);
+      if (e1.lengthSq() < 1e-6) e1.set(1, 0, 0).cross(u);
+      e1.normalize();
+      const e2 = new THREE.Vector3().crossVectors(u, e1);
+      let sxx = 0, syy = 0, sxy = 0;
+      const xs = [], ys = [];
+      for (const c of best) {
+        const x = w.center[c * 3] * e1.x + w.center[c * 3 + 1] * e1.y + w.center[c * 3 + 2] * e1.z;
+        const y = w.center[c * 3] * e2.x + w.center[c * 3 + 1] * e2.y + w.center[c * 3 + 2] * e2.z;
+        xs.push(x); ys.push(y); sxx += x * x; syy += y * y; sxy += x * y;
+      }
+      const phi = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+      const axis = e1.clone().multiplyScalar(Math.cos(phi)).addScaledVector(e2, Math.sin(phi));
+      const minor = e1.clone().multiplyScalar(-Math.sin(phi)).addScaledVector(e2, Math.cos(phi));
+      const pa = xs.map((x, i) => x * Math.cos(phi) + ys[i] * Math.sin(phi)).sort((a, b) => a - b);
+      const pb = xs.map((x, i) => -x * Math.sin(phi) + ys[i] * Math.cos(phi)).sort((a, b) => a - b);
+      const q = (arr, f) => arr[Math.min(arr.length - 1, Math.floor(arr.length * f))];
+      const lo = q(pa, 0.06), hi = q(pa, 0.94), mlo = q(pb, 0.1), mhi = q(pb, 0.9);
+      const R = 1.035;
+      const at = (a, b) => u.clone().addScaledVector(axis, a).addScaledVector(minor, b).normalize().multiplyScalar(R);
+      const mid = (lo + hi) / 2, mm = (mlo + mhi) / 2;
+      out.set(t.id, { center: at(mid, mm), A: at(lo, mm), B: at(hi, mm), M1: at(mid, mlo), M2: at(mid, mhi), size: best.length });
+    }
+    this.territories = out;
+  }
+
+  // Screen position (CSS px) of a world point, or null if behind the globe.
+  projectPoint(v) {
+    const toCam = this.view.position.clone().sub(v);
+    if (toCam.dot(v) < 0) return null;
+    const p = v.clone().project(this.view);
+    const rect = this.canvas.getBoundingClientRect();
+    return { x: rect.left + (p.x + 1) / 2 * rect.width, y: rect.top + (1 - p.y) / 2 * rect.height };
+  }
+
   // ------------------------------------------------------------ helpers
   cellPos(c, extra = 0, out = new THREE.Vector3()) {
     const w = this.state.world;
@@ -881,6 +999,7 @@ export class Renderer {
       const want = this.autoPixel();
       if (want !== this.pixel) { this.pixel = want; this.resize(); }
     }
+    if (this.state && this.borderMesh && this.borderPixel !== this.pixel) this.sync(); // recolour + rebuild borders for the new zoom
     const s = this.state;
     if (s) {
       for (const fx of s.fx) this.handleFx(fx);

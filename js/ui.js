@@ -1,7 +1,7 @@
 // DOM panels: powers, tribes, chronicle, inspector, toast.
-import { BIOME_NAMES, BLD_NAMES, isWater } from './world.js?v=mv80ti6g';
-import { AGES, yearOf, fertEff, strength } from './sim.js?v=mv80ti6g';
-import { POWERS } from './powers.js?v=mv80ti6g';
+import { BIOME_NAMES, BLD_NAMES, isWater } from './world.js?v=mv80zrn6';
+import { AGES, yearOf, fertEff, strength } from './sim.js?v=mv80zrn6';
+import { POWERS } from './powers.js?v=mv80zrn6';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -43,6 +43,7 @@ export class UI {
       game.renderer.flyTo(t.capital, 1.45);
     });
     this.labelEls = new Map();
+    this.mapEls = new Map();
     $('loglist').addEventListener('click', (e) => {
       const li = e.target.closest('li');
       if (li && +li.dataset.cell >= 0) game.renderer.flyTo(+li.dataset.cell);
@@ -72,16 +73,61 @@ export class UI {
     $('pixmode').textContent = 'Pixels: ' + (m === 'auto' ? 'Auto' : m === 1 ? 'Sharp' : 'Retro');
   }
 
-  // Tribe names floating over their capitals.
+  // Tribe names: big map-style names stretched across their land when zoomed out,
+  // small names over the capital when zoomed in.
   updateLabels() {
     const s = this.game.state, r = this.game.renderer;
     if (this.labelState !== s) {
       for (const el of this.labelEls.values()) el.remove();
-      this.labelEls.clear();
+      for (const el of this.mapEls.values()) el.remove();
+      this.labelEls.clear(); this.mapEls.clear();
       this.labelState = s;
     }
     const W = window.innerWidth, H = window.innerHeight;
+    const dist = r.camera.position.length();
+    const mapAlpha = Math.max(0, Math.min(1, (dist - 1.75) / 0.45)); // 0 close .. 1 far
+    const terr = r.territories || new Map();
     for (const t of s.tribes) {
+      // ---- map name
+      let m = this.mapEls.get(t.id);
+      const T = t.alive ? terr.get(t.id) : null;
+      let mapShown = false;
+      if (T && mapAlpha > 0.02) {
+        const C = r.projectPoint(T.center);
+        // fade out names near the edge of the globe
+        const face = T.center.clone().normalize().dot(r.view.position.clone().normalize());
+        const edge = Math.max(0, Math.min(1, (face - 0.35) / 0.25));
+        if (C && edge > 0.02) {
+          const A = r.projectPoint(T.A), B = r.projectPoint(T.B), M1 = r.projectPoint(T.M1), M2 = r.projectPoint(T.M2);
+          const len = A && B ? Math.hypot(B.x - A.x, B.y - A.y) : 2 * Math.hypot(((A || B).x - C.x), ((A || B).y - C.y));
+          const thick = M1 && M2 ? Math.hypot(M2.x - M1.x, M2.y - M1.y) : len * 0.3;
+          let ang = A && B ? Math.atan2(B.y - A.y, B.x - A.x) : 0;
+          if (ang > Math.PI / 2) ang -= Math.PI; else if (ang < -Math.PI / 2) ang += Math.PI;
+          const name = t.name.toUpperCase();
+          // VT323: ~0.5em per letter + 0.3em spacing
+          const fs = Math.min((len * 0.9) / (name.length * 0.8), Math.max(thick * 0.75, 12), 120);
+          if (fs >= 11) {
+            if (!m) {
+              m = document.createElement('div');
+              m.className = 'mapname';
+              $('labels').appendChild(m);
+              this.mapEls.set(t.id, m);
+            }
+            if (m.textContent !== name) m.textContent = name;
+            const c = t.color.map((v) => Math.round(Math.min(255, v * 255 * 0.3 + 178)));
+            m.style.color = `rgb(${c.join(',')})`;
+            m.style.fontSize = fs.toFixed(1) + 'px';
+            m.style.opacity = (0.92 * mapAlpha * edge).toFixed(2);
+            m.style.transform = `translate(${Math.round(C.x)}px, ${Math.round(C.y)}px) translate(-50%, -50%) rotate(${ang.toFixed(3)}rad)`;
+            m.style.display = '';
+            mapShown = true;
+          }
+        }
+      }
+      if (!mapShown && m) m.style.display = 'none';
+      if (!t.alive && m) { m.remove(); this.mapEls.delete(t.id); }
+
+      // ---- capital name (fades in as the map name fades out)
       let el = this.labelEls.get(t.id);
       if (!t.alive) { if (el) { el.remove(); this.labelEls.delete(t.id); } continue; }
       if (!el) {
@@ -93,9 +139,11 @@ export class UI {
         this.labelEls.set(t.id, el);
       }
       const p = r.project(t.capital);
-      const vis = p && p.x > 0 && p.y > 0 && p.x < W && p.y < H;
+      const alpha = mapShown ? 1 - mapAlpha : 1;
+      const vis = p && alpha > 0.05 && p.x > 0 && p.y > 0 && p.x < W && p.y < H;
       el.style.display = vis ? '' : 'none';
       if (!vis) continue;
+      el.style.opacity = alpha.toFixed(2);
       const txt = `${AGE_ICON[t.tech]} ${t.name}${t.enemies.size ? ' ⚔️' : ''}`;
       if (el.textContent !== txt) el.textContent = txt;
       el.style.transform = `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px) translate(-50%, -100%) translateY(-14px)`;

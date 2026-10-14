@@ -1,6 +1,6 @@
 // The globe: a subdivided icosahedron. Each small triangle is one cell.
 // Pure data, no DOM, no three.js — so Node tests can use it.
-import { makeRng, makeNoise3, fbm } from './rng.js?v=mv80ti6g';
+import { makeRng, makeNoise3, fbm } from './rng.js?v=mv80zrn6';
 
 export const B = {
   DEEP: 0, SHALLOW: 1, ICE: 2, BEACH: 3, GRASS: 4, FOREST: 5, JUNGLE: 6,
