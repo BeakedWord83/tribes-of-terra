@@ -1,8 +1,8 @@
 // three.js view of the world: a voxel globe drawn at low resolution
 // and scaled up with hard pixels.
-import * as THREE from '../vendor/three.module.js?v=mv80qc5d';
-import { OrbitControls } from '../vendor/OrbitControls.js?v=mv80qc5d';
-import { B, BLD, isWater, cellsWithin } from './world.js?v=mv80qc5d';
+import * as THREE from '../vendor/three.module.js?v=mv80ti6g';
+import { OrbitControls } from '../vendor/OrbitControls.js?v=mv80ti6g';
+import { B, BLD, isWater, cellsWithin } from './world.js?v=mv80ti6g';
 
 const CELL_TRIS = 7; // 1 top + 3 side quads
 const LEVEL_H = 0.011;
@@ -42,10 +42,12 @@ export class Renderer {
     this.camera.position.set(0, 0.8, 3.1);
     this.controls = new OrbitControls(this.camera, canvas);
     Object.assign(this.controls, { enablePan: false, enableDamping: true, dampingFactor: 0.08, minDistance: 1.16, maxDistance: 5, autoRotate: true, autoRotateSpeed: 0.35 });
-    this.scene.add(this.camera);
+    // `camera` is driven by OrbitControls; `view` is what we draw with (camera + tilt near the ground)
+    this.view = new THREE.PerspectiveCamera(40, 1, 0.01, 200);
+    this.scene.add(this.view);
     const sun = new THREE.DirectionalLight(0xfff3dd, 2.6);
     sun.position.set(-2, 2.5, 3);
-    this.camera.add(sun);
+    this.view.add(sun);
     this.scene.add(new THREE.HemisphereLight(0xbfd8ff, 0x302418, 1.1));
     this.addStars();
     const atmo = new THREE.Mesh(new THREE.SphereGeometry(1.09, 48, 32),
@@ -82,15 +84,14 @@ export class Renderer {
   }
 
   autoPixel() {
-    const d = (this.camBase || this.camera.position).length();
+    const d = this.camera.position.length();
     return d > 2.7 ? 3 : d > 1.8 ? 2 : 1;
   }
 
   resize() {
     const w = this.canvas.clientWidth || window.innerWidth, h = this.canvas.clientHeight || window.innerHeight;
     this.gl.setSize(Math.max(1, Math.floor(w / this.pixel)), Math.max(1, Math.floor(h / this.pixel)), false);
-    this.camera.aspect = w / h;
-    this.camera.updateProjectionMatrix();
+    for (const cam of [this.camera, this.view]) { cam.aspect = w / h; cam.updateProjectionMatrix(); }
   }
 
   // ------------------------------------------------------------ world mesh
@@ -442,7 +443,7 @@ export class Renderer {
 
   // Every frame: flicker campfires, walk villagers, move armies and boats.
   updateLife(dt) {
-    const near = (this.camBase || this.camera.position).length() < 2.4;
+    const near = this.camera.position.length() < 2.4;
     const T = this.time;
     // flames
     const sc = new THREE.Matrix4();
@@ -659,7 +660,7 @@ export class Renderer {
     if (!this.globe) return -1;
     const rect = this.canvas.getBoundingClientRect();
     const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
-    this.raycaster.setFromCamera(ndc, this.camera);
+    this.raycaster.setFromCamera(ndc, this.view);
     const hit = this.raycaster.intersectObject(this.globe, false)[0];
     return hit ? Math.floor(hit.faceIndex / CELL_TRIS) : -1;
   }
@@ -667,9 +668,9 @@ export class Renderer {
   // Screen position (CSS px) of a cell, or null if on the far side.
   project(c) {
     const p = this.cellPos(c);
-    const toCam = this.camera.position.clone().sub(p);
+    const toCam = this.view.position.clone().sub(p);
     if (toCam.dot(p) < 0) return null;
-    p.project(this.camera);
+    p.project(this.view);
     const rect = this.canvas.getBoundingClientRect();
     return { x: rect.left + (p.x + 1) / 2 * rect.width, y: rect.top + (1 - p.y) / 2 * rect.height };
   }
@@ -696,13 +697,13 @@ export class Renderer {
   flyTo(cell, toDist) {
     const dist = toDist ?? Math.min(this.camera.position.length(), 2.4);
     const target = this.cellPos(cell).normalize().multiplyScalar(dist);
-    const start = (this.camBase || this.camera.position).clone();
+    const start = this.camera.position.clone();
     this.anims.push({
       t: 0, dur: 1.1,
       step: (k) => {
         const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
         const v = start.clone().normalize().lerp(target.clone().normalize(), e).normalize();
-        (this.camBase || this.camera.position).copy(v.multiplyScalar(start.length() + (dist - start.length()) * e));
+        this.camera.position.copy(v.multiplyScalar(start.length() + (dist - start.length()) * e));
       },
     });
   }
@@ -711,9 +712,9 @@ export class Renderer {
   playMeteor(cell, onImpact) {
     const target = this.cellPos(cell);
     // Come in from the top corner of the current view, so the player sees the fall.
-    const camRight = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
-    const camUp = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 1);
-    const dist = this.camera.position.distanceTo(target);
+    const camRight = new THREE.Vector3().setFromMatrixColumn(this.view.matrixWorld, 0);
+    const camUp = new THREE.Vector3().setFromMatrixColumn(this.view.matrixWorld, 1);
+    const dist = this.view.position.distanceTo(target);
     const start = target.clone()
       .add(camRight.multiplyScalar((Math.random() < 0.5 ? -0.32 : 0.32) * dist))
       .add(camUp.multiplyScalar(0.26 * dist))
@@ -859,22 +860,23 @@ export class Renderer {
     this.time += dt;
     this.controls.rotateSpeed = 0.35 * Math.max(0.15, this.camera.position.length() - 1);
     // OrbitControls owns the 'base' camera; we restore it before each update.
-    if (this.camBase) { this.camera.position.copy(this.camBase); this.camBase = null; }
     this.controls.update();
     this.camera.updateMatrixWorld();
+    this.view.position.copy(this.camera.position);
+    this.view.quaternion.copy(this.camera.quaternion);
     // Close to the ground: swing the camera back and look at the same spot from the side.
     const dist = this.camera.position.length();
     const tilt = Math.min(1, Math.max(0, (1.85 - dist) / (1.85 - 1.16)));
     if (tilt > 0) {
-      this.camBase = this.camera.position.clone();
-      const up = this.camBase.clone().normalize();
+      const up = this.camera.position.clone().normalize();
       const focus = up.clone().multiplyScalar(1.03);
       const scrUp = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 1);
       const h = dist - 1.03, ang = tilt * 0.95;
-      this.camera.position.copy(focus).addScaledVector(up, Math.cos(ang) * h).addScaledVector(scrUp, -Math.sin(ang) * h);
-      this.camera.lookAt(focus);
-      this.camera.updateMatrixWorld();
+      this.view.position.copy(focus).addScaledVector(up, Math.cos(ang) * h).addScaledVector(scrUp, -Math.sin(ang) * h);
+      this.view.up.copy(scrUp);
+      this.view.lookAt(focus);
     }
+    this.view.updateMatrixWorld();
     if (this.pixelMode === 'auto') {
       const want = this.autoPixel();
       if (want !== this.pixel) { this.pixel = want; this.resize(); }
@@ -915,10 +917,11 @@ export class Renderer {
     let off = null;
     if (this.shake > 0) {
       off = new THREE.Vector3().randomDirection().multiplyScalar(this.shake * 0.03);
-      this.camera.position.add(off);
+      this.view.position.add(off);
       this.shake = Math.max(0, this.shake - dt);
     }
-    this.gl.render(this.scene, this.camera);
-    if (off) this.camera.position.sub(off);
+    this.view.updateMatrixWorld();
+    this.gl.render(this.scene, this.view);
+    if (off) { this.view.position.sub(off); this.view.updateMatrixWorld(); }
   }
 }

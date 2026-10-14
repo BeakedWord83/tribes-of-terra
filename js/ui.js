@@ -1,7 +1,7 @@
 // DOM panels: powers, tribes, chronicle, inspector, toast.
-import { BIOME_NAMES, BLD_NAMES, isWater } from './world.js?v=mv80qc5d';
-import { AGES, yearOf, fertEff, strength } from './sim.js?v=mv80qc5d';
-import { POWERS } from './powers.js?v=mv80qc5d';
+import { BIOME_NAMES, BLD_NAMES, isWater } from './world.js?v=mv80ti6g';
+import { AGES, yearOf, fertEff, strength } from './sim.js?v=mv80ti6g';
+import { POWERS } from './powers.js?v=mv80ti6g';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));

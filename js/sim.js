@@ -1,7 +1,7 @@
 // The simulation: tribes, economy, nature, diplomacy, war.
 // Pure logic, no DOM. One tick = one month.
-import { B, BLD, isWater, classify, maxTrees, cellsWithin, angleBetween, nearWater } from './world.js?v=mv80qc5d';
-import { makeRng } from './rng.js?v=mv80qc5d';
+import { B, BLD, isWater, classify, maxTrees, cellsWithin, angleBetween, nearWater } from './world.js?v=mv80ti6g';
+import { makeRng } from './rng.js?v=mv80ti6g';
 
 export const AGES = ['Stone Age', 'Bronze Age', 'Iron Age'];
 const SYL = ['ka', 'ru', 'to', 'mi', 'zan', 'el', 'dor', 'ash', 'ul', 'ny', 'ber', 'tha', 'gor', 'vi',

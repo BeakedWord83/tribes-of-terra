@@ -480,7 +480,7 @@ async function main() {
     // ---- measure real on-screen sizes of a house and a person near the capital
     const sz = await ev(async (capCell) => {
       const THREE = await import(new URL('vendor/three.module.js', location.href).href);
-      const R = game.renderer, cam = R.camera;
+      const R = game.renderer, cam = R.view;
       const rect = R.canvas.getBoundingClientRect();
       const toPx = (v) => { const p = v.clone().project(cam); return { x: (p.x + 1) / 2 * rect.width, y: (1 - p.y) / 2 * rect.height, z: p.z }; };
       const capPos = R.cellPos(capCell);

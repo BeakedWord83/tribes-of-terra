@@ -1,7 +1,7 @@
 // God powers. Each one takes the sim state and a target cell.
 // Returns { ok, msg }. No DOM.
-import { B, BLD, isWater, classify, maxTrees, cellsWithin, angleBetween, MAX_LEVEL } from './world.js?v=mv80qc5d';
-import { spawnTribe, addLog, pushFx, ignite, setOwner, AGES } from './sim.js?v=mv80qc5d';
+import { B, BLD, isWater, classify, maxTrees, cellsWithin, angleBetween, MAX_LEVEL } from './world.js?v=mv80ti6g';
+import { spawnTribe, addLog, pushFx, ignite, setOwner, AGES } from './sim.js?v=mv80ti6g';
 
 export const POWERS = [
   { id: 'tribe', name: 'Spawn Tribe', icon: '👣', radius: 0.065, desc: 'Plant a new people on land.' },

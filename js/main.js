@@ -1,9 +1,9 @@
 // Wires world, sim, renderer and UI together and runs the game loop.
-import { generateWorld, worldHash } from './world.js?v=mv80qc5d';
-import { createSim, step } from './sim.js?v=mv80qc5d';
-import { applyPower, POWERS, POWER_BY_ID } from './powers.js?v=mv80qc5d';
-import { Renderer } from './render.js?v=mv80qc5d';
-import { UI, randomSeed } from './ui.js?v=mv80qc5d';
+import { generateWorld, worldHash } from './world.js?v=mv80ti6g';
+import { createSim, step } from './sim.js?v=mv80ti6g';
+import { applyPower, POWERS, POWER_BY_ID } from './powers.js?v=mv80ti6g';
+import { Renderer } from './render.js?v=mv80ti6g';
+import { UI, randomSeed } from './ui.js?v=mv80ti6g';
 
 const params = new URLSearchParams(location.search);
 const TICKS_PER_SPEED = 4; // ticks per second at speed 1
