@@ -107,12 +107,13 @@ window.addEventListener('keydown', (e) => {
 // --- start
 const seed = params.get('seed') || randomSeed();
 if (params.get('rotate') === '0') game.renderer.controls.autoRotate = false;
-if (params.get('pixel')) game.renderer.setPixelSize(Math.max(1, +params.get('pixel')));
+if (params.get('pixel')) game.renderer.setPixelSize(params.get('pixel') === 'auto' ? 'auto' : Math.max(1, +params.get('pixel')));
+game.ui.setPixelMode(game.renderer.pixelMode);
 game.newWorld(seed);
 game.setSpeed(params.has('speed') ? +params.get('speed') : 1);
 
 // --- loop
-let last = performance.now(), acc = 0, syncT = 0, uiT = 0, workT = 0, dirty = false;
+let last = performance.now(), acc = 0, syncT = 0, uiT = 0, dirty = false;
 function loop(now) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
@@ -120,11 +121,11 @@ function loop(now) {
   let n = 0;
   while (acc >= 1 && n < 30) { step(game.state); acc -= 1; n++; dirty = true; }
   if (n >= 30) acc = 0;
-  syncT += dt; uiT += dt; workT += dt;
+  syncT += dt; uiT += dt;
   if (dirty && syncT > 0.15) { game.renderer.sync(); syncT = 0; dirty = false; }
   if (uiT > 0.3) { game.ui.update(); uiT = 0; }
-  if (game.speed > 0 && workT > 0.25) { game.renderer.spawnWorkers(); workT = 0; }
   game.renderer.frame(dt);
+  game.ui.updateLabels();
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);

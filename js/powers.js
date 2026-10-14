@@ -46,7 +46,7 @@ const HANDLERS = {
   meteor(state, cell, r) {
     const w = state.world, rng = state.rng;
     const hitWater = isWater(w.biome[cell]);
-    const area = cellsWithin(w, cell, r * 1.9);
+    const area = cellsWithin(w, cell, r * 2.1);
     const killed = new Map();
     let destroyed = 0;
     for (const c of area) {
@@ -77,7 +77,7 @@ const HANDLERS = {
           if (w.bld[c] === BLD.FARM || (w.bld[c] === BLD.HOUSE && rng() < 0.5)) { w.bld[c] = w.bld[c] === BLD.HOUSE ? BLD.RUIN : BLD.NONE; destroyed++; }
           if (o >= 0) { const t = state.tribes[o]; const l = Math.min(t.pop, 1.5); t.pop -= l; killed.set(o, (killed.get(o) || 0) + l); }
         }
-      } else if (w.trees[c] > 0.2 && rng() < 0.6) ignite(state, c);
+      } else if (w.trees[c] > 0.05 && rng() < 0.85) ignite(state, c);
       else if (w.bld[c] === BLD.HOUSE && rng() < 0.3) { w.bld[c] = BLD.RUIN; destroyed++; }
     }
     // Rim cells next to the crater get classified again (beaches etc.)
@@ -114,13 +114,14 @@ const HANDLERS = {
     let grown = 0;
     for (const c of cellsWithin(w, cell, r)) {
       if (isWater(w.biome[c]) || w.bld[c] === BLD.HOUSE || w.bld[c] === BLD.MINE) continue;
-      w.moist[c] = Math.min(1, w.moist[c] + 0.15);
+      w.moist[c] = Math.min(1, w.moist[c] + 0.35); // even deserts turn green
       if (w.biome[c] === B.SCORCHED) { w.scorch[c] = 0; state.scorched.delete(c); }
       classify(w, c);
       if (w.bld[c] === BLD.FARM) continue;
       const mx = Math.max(maxTrees(w, c), w.biome[c] === B.DESERT || w.biome[c] === B.SNOW ? 0 : 0.6);
       if (mx > w.trees[c]) { w.trees[c] = mx; grown++; }
     }
+    pushFx(state, { type: 'grow', cell, r });
     addLog(state, `A forest springs up (${grown} groves).`, 'nature', cell);
     return { ok: grown > 0, msg: grown ? 'A forest springs up.' : 'Nothing can grow here.', grown };
   },

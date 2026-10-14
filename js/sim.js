@@ -159,28 +159,54 @@ function weather(state) {
 
 export function ignite(state, c) {
   const w = state.world;
-  if (isWater(w.biome[c]) || w.wet[c] > 0.3) return false;
-  w.fire[c] = 6 + state.rng.int(6);
+  if (isWater(w.biome[c]) || w.wet[c] > 0.3 || w.fire[c]) return false;
+  w.fire[c] = 10 + state.rng.int(12);
   state.burning.add(c);
   return true;
 }
 
 function nature(state) {
   const w = state.world, rng = state.rng;
-  // Fire spreads through trees and burns them
+  // Fire spreads through trees, burns them and leaves black ash
   for (const c of [...state.burning]) {
-    w.trees[c] = Math.max(0, w.trees[c] - 0.12);
+    const hadTrees = w.trees[c] > 0.05;
+    w.trees[c] = Math.max(0, w.trees[c] - 0.06);
     const o = w.owner[c];
     if (o >= 0) state.tribes[o].pop = Math.max(0, state.tribes[o].pop - 0.25);
     if (w.bld[c] === BLD.FARM && rng() < 0.3) w.bld[c] = BLD.NONE;
     if (w.bld[c] === BLD.HOUSE && rng() < 0.08) w.bld[c] = BLD.RUIN;
     for (let k = 0; k < 3; k++) {
       const n = w.nbr[c * 3 + k];
-      if (!w.fire[n] && w.trees[n] > 0.25 && w.wet[n] < 0.3 && rng() < 0.3 * (1 - Math.max(0, w.wet[n]))) ignite(state, n);
+      if (w.fire[n] || w.trees[n] <= 0.12 || w.wet[n] >= 0.3) continue;
+      const dry = 1 + 0.8 * Math.max(0, -w.wet[n]);
+      if (rng() < 0.34 * (1 - Math.max(0, w.wet[n])) * dry * (0.6 + 0.6 * w.trees[n])) ignite(state, n);
+    }
+    // Sparks jump over a tile now and then
+    if (rng() < 0.04) {
+      const a = w.nbr[c * 3 + rng.int(3)], n = w.nbr[a * 3 + rng.int(3)];
+      if (w.trees[n] > 0.3) ignite(state, n);
     }
     w.fire[c]--;
-    if (w.fire[c] <= 0 || w.trees[c] <= 0.01) { w.fire[c] = 0; state.burning.delete(c); }
+    if (w.fire[c] <= 0 || w.trees[c] <= 0.01) {
+      w.fire[c] = 0; state.burning.delete(c);
+      state.fireBurned = (state.fireBurned || 0) + 1;
+      state.fireLast = c;
+      if (hadTrees && (w.bld[c] === BLD.NONE || w.bld[c] === BLD.RUIN) && !isWater(w.biome[c])) {
+        w.trees[c] = Math.min(w.trees[c], 0.02);
+        w.biome[c] = B.SCORCHED; // ash; grows back when the timer ends
+        w.scorch[c] = Math.max(w.scorch[c], 50 + rng.int(60));
+        state.scorched.add(c);
+      }
+    }
   }
+  if (state.burning.size === 0 && state.fireBurned) {
+    if (state.fireBurned >= 8) addLog(state, `The fire is out. It burned ${state.fireBurned} tiles.`, 'disaster', state.fireLast);
+    state.fireBurned = 0;
+  } else if (state.burning.size >= 25 && !state.fireWarned) {
+    state.fireWarned = true;
+    addLog(state, 'A great wildfire spreads through the forest!', 'disaster', [...state.burning][0]);
+  }
+  if (state.burning.size === 0) state.fireWarned = false;
   for (const c of [...state.scorched]) {
     w.scorch[c]--;
     if (w.scorch[c] <= 0) { state.scorched.delete(c); classify(w, c); }

@@ -306,7 +306,7 @@ async function main() {
   // ============================================================ 7. forest, quake, plague, bless
   try {
     // forest
-    const f = await ev(() => __H.find((c, w) => w.biome[c] > 2 && w.level[c] > 0 && w.trees[c] === 0 && w.bld[c] === 0 && w.owner[c] < 0 && w.wet[c] === 0));
+    const f = await ev(() => __H.find((c, w) => w.biome[c] > 2 && w.biome[c] !== 9 && w.level[c] > 0 && w.trees[c] === 0 && w.bld[c] === 0 && w.owner[c] < 0 && w.wet[c] === 0));
     if (!f) throw new Error('no visible bare land for forest');
     const f0 = await ev((c) => game.state.world.trees[c], f.c);
     await clickBtn('#powerlist [data-power="forest"]');
@@ -449,6 +449,224 @@ async function main() {
     check('12a Esc cancels selected power', a === 'rain' && b === null, `before=${a} after=${b}`);
     check('12b right-click cancels selected power (and does not apply it)', c === 'quake' && d.power === null && d.on === 0, `before=${c} after=${d.power}, highlighted buttons=${d.on}`);
   } catch (e) { check('12 cancel', false, e.message); }
+
+  // ============================================================ 14. zoom in: sharp pixels + tilted view (real mouse wheel)
+  const settle = async () => {
+    // wait until the camera stops moving (damping / fly animation)
+    let last = null;
+    for (let i = 0; i < 40; i++) {
+      await sleep(150);
+      const p = await ev(() => game.renderer.camera.position.toArray().map((v) => +v.toFixed(4)).join(','));
+      if (p === last) return;
+      last = p;
+    }
+  };
+  try {
+    await load('?seed=42&rotate=0&speed=0');
+    const far = await ev(() => ({ px: game.renderer.pixel, cw: game.renderer.canvas.width, css: game.renderer.canvas.clientWidth }));
+    const cap = await ev(() => { game.step(260); const t = [...game.state.tribes].filter((t) => t.alive).sort((a, b) => b.pop - a.pop)[0]; game.renderer.flyTo(t.capital); return { id: t.id, c: t.capital, name: t.name }; });
+    await settle();
+    await page.mouse.move(W / 2, H_ / 2);
+    for (let i = 0; i < 30; i++) { await page.mouse.wheel(0, -250); await sleep(40); }
+    await settle();
+    // centre the capital again after zooming (zoom is toward the globe center)
+    await ev((c) => game.renderer.flyTo(c, 1.3), cap.c);
+    await settle();
+    const near = await ev(() => ({ px: game.renderer.pixel, cw: game.renderer.canvas.width, css: game.renderer.canvas.clientWidth, dist: (game.renderer.camBase || game.renderer.camera.position).length() }));
+    await shot(page, '14-zoomed-village');
+    check('14a far view uses chunky pixels', far.px === 3 && far.cw <= Math.ceil(far.css / 3), `pixel=${far.px} canvas=${far.cw} css=${far.css}`);
+    check('14b mouse wheel zooms close; close view is sharp (canvas = CSS size)', near.px === 1 && near.cw === near.css && near.dist < 1.5, `dist=${near.dist.toFixed(2)} pixel=${near.px} canvas=${near.cw} css=${near.css}`);
+
+    // ---- measure real on-screen sizes of a house and a person near the capital
+    const sz = await ev(async (capCell) => {
+      const THREE = await import(new URL('vendor/three.module.js', location.href).href);
+      const R = game.renderer, cam = R.camera;
+      const rect = R.canvas.getBoundingClientRect();
+      const toPx = (v) => { const p = v.clone().project(cam); return { x: (p.x + 1) / 2 * rect.width, y: (1 - p.y) / 2 * rect.height, z: p.z }; };
+      const capPos = R.cellPos(capCell);
+      const measure = (mesh) => {
+        mesh.geometry.computeBoundingBox();
+        const bb = mesh.geometry.boundingBox, m = new THREE.Matrix4(), pos = new THREE.Vector3();
+        let best = -1, bd = 1e9;
+        for (let i = 0; i < mesh.count; i++) { mesh.getMatrixAt(i, m); pos.setFromMatrixPosition(m); const d = pos.distanceTo(capPos); if (d < bd) { bd = d; best = i; } }
+        if (best < 0) return null;
+        mesh.getMatrixAt(best, m);
+        let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+        for (const x of [bb.min.x, bb.max.x]) for (const y of [bb.min.y, bb.max.y]) for (const z of [bb.min.z, bb.max.z]) {
+          const p = toPx(new THREE.Vector3(x, y, z).applyMatrix4(m));
+          x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y);
+        }
+        return { w: x1 - x0, h: y1 - y0, dist: bd };
+      };
+      const house = R.walls.count ? measure(R.walls) : measure(R.huts);
+      const body = measure(R.bodies), head = measure(R.heads);
+      return { house, person: body && head ? { h: body.h + head.h, w: Math.max(body.w, head.w) } : null, people: R.bodies.count, villages: R.villages.length, flames: R.flames.count };
+    }, cap.c);
+    check('14c a house near the capital is big on screen (>= 18 px)', sz.house && Math.max(sz.house.w, sz.house.h) >= 18, `house ${sz.house?.w.toFixed(1)}x${sz.house?.h.toFixed(1)} px`);
+    check('14d a person is visible on screen (>= 7 px tall)', sz.person && sz.person.h >= 7, `person ${sz.person?.w.toFixed(1)}x${sz.person?.h.toFixed(1)} px, people drawn=${sz.people}`);
+    const villCheck = await ev(() => {
+      const w = game.state.world; let n = 0;
+      for (let c = 0; c < w.count; c++) if (w.bld[c] === 2 && w.owner[c] >= 0 && game.state.tribes[w.owner[c]].alive) n++;
+      return n;
+    });
+    check('14e one campfire per village', sz.flames === sz.villages && sz.villages === Math.min(villCheck, 4000) && sz.villages > 0, `flames=${sz.flames} villages drawn=${sz.villages} village tiles=${villCheck}`);
+
+    // people walk and flames flicker (compare instance matrices over time)
+    const motion = await ev(async () => {
+      const R = game.renderer;
+      const grab = (m, n) => Array.from(m.instanceMatrix.array.slice(0, n * 16));
+      const n = Math.min(200, R.bodies.count), nf = Math.min(50, R.flames.count);
+      const b0 = grab(R.bodies, n), f0 = grab(R.flames, nf);
+      await new Promise((r) => setTimeout(r, 1500));
+      const b1 = grab(R.bodies, n), f1 = grab(R.flames, nf);
+      let moved = 0;
+      for (let i = 0; i < n; i++) { const d = Math.hypot(b1[i * 16 + 12] - b0[i * 16 + 12], b1[i * 16 + 13] - b0[i * 16 + 13], b1[i * 16 + 14] - b0[i * 16 + 14]); if (d > 1e-5) moved++; }
+      let flick = 0;
+      for (let i = 0; i < nf; i++) if (Math.abs(f1[i * 16 + 5] - f0[i * 16 + 5]) > 1e-6 || Math.abs(f1[i * 16 + 1] - f0[i * 16 + 1]) > 1e-6) flick++;
+      return { n, moved, nf, flick };
+    });
+    check('14f villagers walk (positions change over 1.5 s)', motion.moved >= motion.n * 0.3, `${motion.moved}/${motion.n} people moved`);
+    check('14g campfire flames flicker', motion.flick >= motion.nf * 0.5, `${motion.flick}/${motion.nf} flames changed`);
+
+    // ---- tribe name label sits over the capital and is clickable
+    const lbl = await ev((id) => {
+      const el = document.querySelector(`#labels .lbl[data-id="${id}"]`);
+      const t = game.state.tribes[id];
+      const p = game.project(t.capital);
+      if (!el || !p) return null;
+      const r = el.getBoundingClientRect();
+      return { text: el.textContent, cx: r.left + r.width / 2, bottom: r.bottom, px: p.x, py: p.y, shown: el.style.display !== 'none', w: r.width };
+    }, cap.id);
+    check('14h tribe name label is shown above its capital', lbl && lbl.shown && lbl.text.includes(cap.name) && Math.abs(lbl.cx - lbl.px) < 6 && lbl.bottom <= lbl.py && lbl.py - lbl.bottom < 40,
+      lbl ? `label "${lbl.text}" centre x=${lbl.cx.toFixed(0)} vs capital x=${lbl.px.toFixed(0)}, bottom=${lbl.bottom.toFixed(0)} capital y=${lbl.py.toFixed(0)}` : 'no label');
+    await ev(() => { game.selected = null; });
+    if (lbl) { await page.mouse.click(lbl.cx, lbl.bottom - 6); await sleep(300); }
+    const selId = await ev(() => game.selected);
+    check('14i clicking a label selects that tribe', selId === cap.id, `selected=${selId} expected ${cap.id}`);
+
+    // ---- pixel mode button
+    const modes = [];
+    for (let i = 0; i < 3; i++) {
+      await clickBtn('#pixmode');
+      await sleep(250);
+      modes.push(await ev(() => ({ text: document.getElementById('pixmode').textContent, px: game.renderer.pixel, cw: game.renderer.canvas.width })));
+    }
+    check('14j pixel button: Retro forces chunky pixels up close', /Retro/.test(modes[0].text) && modes[0].px === 3, JSON.stringify(modes[0]));
+    check('14k pixel button: Sharp forces full resolution', /Sharp/.test(modes[1].text) && modes[1].px === 1, JSON.stringify(modes[1]));
+    check('14l pixel button: back to Auto (sharp because we are close)', /Auto/.test(modes[2].text) && modes[2].px === 1, JSON.stringify(modes[2]));
+  } catch (e) { check('14 zoom/village', false, e.message); }
+
+  // ============================================================ 15. meteor into a forest -> wildfire you can see
+  try {
+    await load('?seed=7&rotate=0&speed=0');
+    // a spot in the middle of a big forest (most tiles within ~0.25 rad are wooded)
+    const tgt = await ev(() => __H.find((c, w) => {
+      if (w.owner[c] >= 0 || w.biome[c] !== 5 || w.trees[c] < 0.7) return false;
+      let n = 0, wood = 0;
+      const cos = Math.cos(0.25);
+      for (let i = 0; i < w.count; i++) {
+        if (w.center[i * 3] * w.center[c * 3] + w.center[i * 3 + 1] * w.center[c * 3 + 1] + w.center[i * 3 + 2] * w.center[c * 3 + 2] < cos) continue;
+        n++; if (w.trees[i] > 0.4) wood++;
+      }
+      return wood / n > 0.6;
+    }, { minDot: 0.75 }));
+    if (!tgt) throw new Error('no visible forest cell');
+    await ev(([x, y]) => __H.snap('f0', x - 120, y - 120, x + 120, y + 120), [tgt.x, tgt.y]);
+    const orange = (name) => ev((n) => { const d = __H.snaps[n].data; let k = 0; for (let i = 0; i < d.length; i += 4) if (d[i] > 200 && d[i + 1] > 60 && d[i + 1] < 200 && d[i + 2] < 90) k++; return k; }, name);
+    const o0 = await orange('f0');
+    await clickBtn('#powerlist [data-power="meteor"]');
+    await mouseTo(tgt.x, tgt.y);
+    await page.mouse.click(tgt.x, tgt.y);
+    await sleep(2600);
+    await ev(([x, y]) => __H.snap('f1', x - 120, y - 120, x + 120, y + 120), [tgt.x, tgt.y]);
+    const o1 = await orange('f1');
+    const fx = await ev(() => ({ flames: game.renderer.fireMesh.count, parts: game.renderer.partMesh.count, hot: game.renderer.hot.size, burning: game.state.burning.size }));
+    await shot(page, '15-meteor-forest');
+    check('15a meteor sets the forest on fire (burning tiles + flame meshes)', fx.burning > 5 && fx.flames >= fx.burning, `burning=${fx.burning} flames=${fx.flames}`);
+    check('15b impact makes debris/smoke particles and a glowing crater', fx.parts > 30 && fx.hot > 5, `particles=${fx.parts} hot crater tiles=${fx.hot}`);
+    check('15c fire shows on screen (orange pixels near the hit)', o1 > o0 + 50, `orange px ${o0} -> ${o1}`);
+    // let the sim run: fire must spread beyond the blast
+    await clickBtn('#speed [data-speed="1"]');
+    await sleep(4000);
+    await clickBtn('#speed [data-speed="0"]');
+    const spread = await ev((c) => {
+      const w = game.state.world;
+      let beyond = 0, ash = 0;
+      for (let i = 0; i < w.count; i++) {
+        const d = Math.acos(Math.min(1, w.center[i * 3] * w.center[c * 3] + w.center[i * 3 + 1] * w.center[c * 3 + 1] + w.center[i * 3 + 2] * w.center[c * 3 + 2]));
+        if (d > 0.09 * 2.2 && (w.fire[i] || w.biome[i] === 12)) beyond++;
+        if (w.biome[i] === 12) ash++;
+      }
+      return { beyond, ash, wild: game.state.log.some((l) => /wildfire|fire is out/i.test(l.text)), smoke: game.renderer.partMesh.count };
+    }, tgt.c);
+    await shot(page, '15-wildfire');
+    check('15d the fire spreads past the blast zone', spread.beyond > 10, `burning/ash tiles beyond blast=${spread.beyond}`);
+    check('15e burnt forest turns to ash', spread.ash > 10, `ash tiles=${spread.ash}`);
+    check('15f chronicle reports the wildfire', spread.wild);
+    // rain on the fire puts it out
+    const fire = await ev(() => { const b = [...game.state.burning]; return b.length ? b[0] : -1; });
+    if (fire >= 0) {
+      await ev((c) => game.renderer.flyTo(c), fire);
+      await settle();
+      const p = await ev((c) => game.project(c), fire);
+      await clickBtn('#powerlist [data-power="rain"]');
+      await mouseTo(p.x, p.y);
+      await page.mouse.click(p.x, p.y);
+      await sleep(300);
+      const r = await ev((c) => { const w = game.state.world; const wx = game.state.weather.at(-1); return { inArea: wx ? wx.cells.filter((x) => w.fire[x]).length : -1, at: wx?.cell }; }, fire);
+      check('15g rain on the fire puts it out in the rain area', r.inArea === 0, `burning tiles under the rain=${r.inArea}`);
+    } else check('15g rain on the fire puts it out in the rain area', false, 'fire already out');
+  } catch (e) { check('15 wildfire', false, e.message); }
+
+  // ============================================================ 16. other powers have visible effects
+  try {
+    await load('?seed=42&rotate=0&speed=0');
+    const countParts = (test) => ev((t) => {
+      const R = game.renderer, f = new Function('p', 'return ' + t);
+      return R.parts.filter((p) => f(p)).length;
+    }, test);
+    const land = await ev(() => __H.find((c, w) => w.biome[c] > 2 && w.level[c] < 5));
+    await clickBtn('#powerlist [data-power="quake"]');
+    await mouseTo(land.x, land.y);
+    await page.mouse.click(land.x, land.y);
+    await sleep(250);
+    const dust = await countParts('p.color.r > p.color.b && p.color.g < 0.7 && p.color.r < 0.8');
+    const shake = await ev(() => game.renderer.shake);
+    await shot(page, '16-quake');
+    check('16a earthquake throws up dust and shakes the camera', dust > 80 && shake > 0, `dust particles=${dust} shake=${shake.toFixed(2)}`);
+
+    const t = await ev(() => { const t = game.state.tribes.find((t) => t.alive); game.renderer.flyTo(t.capital); return { id: t.id, c: t.capital }; });
+    await settle();
+    let p = await ev((c) => game.project(c), t.c);
+    await clickBtn('#powerlist [data-power="plague"]');
+    await mouseTo(p.x, p.y);
+    await page.mouse.click(p.x, p.y);
+    await sleep(300);
+    const green = await countParts('p.color.g > p.color.r * 1.3 && p.color.g > p.color.b * 1.3');
+    await shot(page, '16-plague');
+    check('16b plague makes a green sickness cloud', green > 30, `green particles=${green}`);
+    await clickBtn('#powerlist [data-power="bless"]');
+    await page.mouse.click(p.x, p.y);
+    await sleep(300);
+    const gold = await countParts('p.color.r > 0.9 && p.color.g > 0.8');
+    check('16c bless makes golden sparkles', gold > 30, `gold particles=${gold}`);
+    const forestPt = await ev(() => __H.find((c, w) => w.biome[c] > 2 && w.trees[c] < 0.2 && w.biome[c] !== 7 && w.biome[c] !== 9 && w.owner[c] < 0));
+    await clickBtn('#powerlist [data-power="forest"]');
+    await mouseTo(forestPt.x, forestPt.y);
+    await page.mouse.click(forestPt.x, forestPt.y);
+    await sleep(250);
+    const sprouts = await countParts('p.color.g > 0.7 && p.color.r < 0.8');
+    check('16d grow forest makes green sparkles', sprouts > 30, `green sparkles=${sprouts}`);
+    const rainPt = await ev(() => __H.find((c, w) => w.biome[c] > 2));
+    await clickBtn('#powerlist [data-power="rain"]');
+    await page.mouse.click(rainPt.x, rainPt.y);
+    const bolts = await ev(async () => {
+      let n = 0;
+      for (let i = 0; i < 80; i++) { await new Promise((r) => setTimeout(r, 100)); n = Math.max(n, game.renderer.scene.children.filter((o) => o.type === 'Line').length); if (n) break; }
+      return n;
+    });
+    check('16e rain storms show lightning', bolts > 0, `lightning bolts seen=${bolts}`);
+  } catch (e) { check('16 power effects', false, e.message); }
 
   // ============================================================ final
   check('13 no console errors / pageerrors during the whole run', errors.length === 0, errors.slice(0, 5).join(' | '));

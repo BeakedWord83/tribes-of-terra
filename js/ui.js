@@ -27,8 +27,22 @@ export class UI {
       if (!row) return;
       const t = game.state.tribes[+row.dataset.id];
       game.selectTribe(t.id);
-      game.renderer.flyTo(t.capital);
+      game.renderer.flyTo(t.capital, 1.45);
     });
+    $('pixmode').addEventListener('click', () => {
+      const order = ['auto', 3, 1];
+      const next = order[(order.indexOf(game.renderer.pixelMode) + 1) % order.length];
+      game.renderer.setPixelSize(next);
+      this.setPixelMode(next);
+    });
+    $('labels').addEventListener('click', (e) => {
+      const el = e.target.closest('.lbl');
+      if (!el) return;
+      const t = game.state.tribes[+el.dataset.id];
+      game.selectTribe(t.id);
+      game.renderer.flyTo(t.capital, 1.45);
+    });
+    this.labelEls = new Map();
     $('loglist').addEventListener('click', (e) => {
       const li = e.target.closest('li');
       if (li && +li.dataset.cell >= 0) game.renderer.flyTo(+li.dataset.cell);
@@ -53,6 +67,40 @@ export class UI {
   }
 
   setSeed(seed) { $('seed').value = seed; }
+
+  setPixelMode(m) {
+    $('pixmode').textContent = 'Pixels: ' + (m === 'auto' ? 'Auto' : m === 1 ? 'Sharp' : 'Retro');
+  }
+
+  // Tribe names floating over their capitals.
+  updateLabels() {
+    const s = this.game.state, r = this.game.renderer;
+    if (this.labelState !== s) {
+      for (const el of this.labelEls.values()) el.remove();
+      this.labelEls.clear();
+      this.labelState = s;
+    }
+    const W = window.innerWidth, H = window.innerHeight;
+    for (const t of s.tribes) {
+      let el = this.labelEls.get(t.id);
+      if (!t.alive) { if (el) { el.remove(); this.labelEls.delete(t.id); } continue; }
+      if (!el) {
+        el = document.createElement('div');
+        el.className = 'lbl';
+        el.dataset.id = t.id;
+        el.style.color = rgb(t.color);
+        $('labels').appendChild(el);
+        this.labelEls.set(t.id, el);
+      }
+      const p = r.project(t.capital);
+      const vis = p && p.x > 0 && p.y > 0 && p.x < W && p.y < H;
+      el.style.display = vis ? '' : 'none';
+      if (!vis) continue;
+      const txt = `${AGE_ICON[t.tech]} ${t.name}${t.enemies.size ? ' ⚔️' : ''}`;
+      if (el.textContent !== txt) el.textContent = txt;
+      el.style.transform = `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px) translate(-50%, -100%) translateY(-14px)`;
+    }
+  }
 
   toast(msg) {
     const t = $('toast');

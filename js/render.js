@@ -2,7 +2,7 @@
 // and scaled up with hard pixels.
 import * as THREE from '../vendor/three.module.js';
 import { OrbitControls } from '../vendor/OrbitControls.js';
-import { B, BLD, isWater } from './world.js';
+import { B, BLD, isWater, cellsWithin } from './world.js';
 
 const CELL_TRIS = 7; // 1 top + 3 side quads
 const LEVEL_H = 0.011;
@@ -18,6 +18,9 @@ const PALETTE = {
 const C = (hex) => new THREE.Color(hex);
 const BIOME_COL = Object.fromEntries(Object.entries(PALETTE).map(([k, v]) => [k, C(v)]));
 const TREE_DARK = C(0x2a5a26), FARM_A = C(0xd9b443), FARM_B = C(0xa98f34), MINE_COL = C(0x4c4a48);
+const SMOKE = [C(0x6a6662), C(0x8a8580), C(0x4e4a47)];
+const STEAM = C(0xe8eef2);
+const SKIN = [C(0xf1c9a5), C(0xd9a273), C(0xa8724a), C(0x6e4a2e)];
 const RUIN_COL = C(0x6b5d50), FIRE_A = C(0xff5a00), FIRE_B = C(0xffd23a), DRY = C(0xc9a25a);
 
 function hash01(i) {
@@ -30,6 +33,7 @@ export class Renderer {
   constructor(canvas) {
     this.canvas = canvas;
     this.pixel = 3;
+    this.pixelMode = 'auto'; // 'auto' or a fixed pixel size
     this.gl = new THREE.WebGLRenderer({ canvas, antialias: false, preserveDrawingBuffer: true });
     this.gl.setPixelRatio(1);
     this.scene = new THREE.Scene();
@@ -37,7 +41,7 @@ export class Renderer {
     this.camera = new THREE.PerspectiveCamera(40, 1, 0.01, 200);
     this.camera.position.set(0, 0.8, 3.1);
     this.controls = new OrbitControls(this.camera, canvas);
-    Object.assign(this.controls, { enablePan: false, enableDamping: true, dampingFactor: 0.08, minDistance: 1.25, maxDistance: 5, autoRotate: true, autoRotateSpeed: 0.35 });
+    Object.assign(this.controls, { enablePan: false, enableDamping: true, dampingFactor: 0.08, minDistance: 1.16, maxDistance: 5, autoRotate: true, autoRotateSpeed: 0.35 });
     this.scene.add(this.camera);
     const sun = new THREE.DirectionalLight(0xfff3dd, 2.6);
     sun.position.set(-2, 2.5, 3);
@@ -49,6 +53,7 @@ export class Renderer {
     this.scene.add(atmo);
     this.raycaster = new THREE.Raycaster();
     this.tmpColor = new THREE.Color();
+    this.tmpColor2 = new THREE.Color();
     this.units = [];
     this.anims = [];
     this.shake = 0;
@@ -69,7 +74,17 @@ export class Renderer {
     this.scene.add(new THREE.Points(g, new THREE.PointsMaterial({ color: 0xffffff, size: 1, sizeAttenuation: false })));
   }
 
-  setPixelSize(p) { this.pixel = p; this.resize(); }
+  // 'auto': chunky pixels far away, sharp when zoomed in. A number: fixed pixel size.
+  setPixelSize(p) {
+    this.pixelMode = p;
+    if (p !== 'auto') this.pixel = p;
+    this.resize();
+  }
+
+  autoPixel() {
+    const d = (this.camBase || this.camera.position).length();
+    return d > 2.7 ? 3 : d > 1.8 ? 2 : 1;
+  }
 
   resize() {
     const w = this.canvas.clientWidth || window.innerWidth, h = this.canvas.clientHeight || window.innerHeight;
@@ -84,7 +99,7 @@ export class Renderer {
     const w = state.world;
     if (this.globe) {
       this.scene.remove(this.globe); this.globe.geometry.dispose();
-      for (const m of [this.trees, this.walls, this.roofs, this.mines, this.unitMesh, this.flags, this.poles]) { this.scene.remove(m); m.geometry.dispose(); }
+      for (const m of this.inst) { this.scene.remove(m); m.geometry.dispose(); }
       for (const a of this.anims) a.dispose?.();
       this.anims = []; this.units = [];
       for (const o of this.weatherObjs?.values() || []) this.scene.remove(o.group);
@@ -183,6 +198,12 @@ export class Renderer {
       this.tmpColor.setRGB(t.color[0], t.color[1], t.color[2]);
       out.lerp(this.tmpColor, border ? 0.7 : bld === BLD.FARM ? 0.12 : 0.28);
     }
+    const hot = this.hot?.get(c);
+    if (hot !== undefined && !isWater(b)) {
+      const k = Math.max(0, 1 - (this.time - hot) / 14);
+      this.tmpColor.setHex(0xff3a00).lerp(FIRE_B, 0.3 * (0.5 + 0.5 * Math.sin(this.time * 6 + c)));
+      out.lerp(this.tmpColor, 0.85 * k);
+    }
     if (w.fire[c]) {
       const f = 0.5 + 0.5 * Math.sin(this.time * 18 + c);
       this.tmpColor.copy(FIRE_A).lerp(FIRE_B, f);
@@ -212,27 +233,62 @@ export class Renderer {
   // ------------------------------------------------------------ instances
   buildInstances() {
     const lam = (opts) => new THREE.MeshLambertMaterial({ flatShading: true, ...opts });
-    const treeG = new THREE.ConeGeometry(0.0075, 0.022, 4); treeG.translate(0, 0.011, 0);
-    this.trees = new THREE.InstancedMesh(treeG, lam({}), 14000);
-    const wallG = new THREE.BoxGeometry(0.008, 0.007, 0.008); wallG.translate(0, 0.0035, 0);
-    this.walls = new THREE.InstancedMesh(wallG, lam({ color: 0xe8dcc0 }), 12000);
-    const roofG = new THREE.ConeGeometry(0.0075, 0.006, 4); roofG.rotateY(Math.PI / 4); roofG.translate(0, 0.01, 0);
-    this.roofs = new THREE.InstancedMesh(roofG, lam({}), 12000);
-    this.houseOffsets = [[-0.006, -0.004], [0.006, -0.003], [0, 0.007]].map(([x, z]) => new THREE.Matrix4().makeTranslation(x, 0, z));
-    const mineG = new THREE.ConeGeometry(0.008, 0.009, 3); mineG.translate(0, 0.0045, 0);
-    this.mines = new THREE.InstancedMesh(mineG, lam({ color: 0x8a8580 }), 3000);
-    const unitG = new THREE.BoxGeometry(0.004, 0.008, 0.004); unitG.translate(0, 0.004, 0);
-    this.unitMesh = new THREE.InstancedMesh(unitG, new THREE.MeshBasicMaterial({}), 600);
-    const poleG = new THREE.CylinderGeometry(0.0009, 0.0009, 0.04, 4); poleG.translate(0, 0.02, 0);
-    this.poles = new THREE.InstancedMesh(poleG, new THREE.MeshBasicMaterial({ color: 0x3a2a1a }), 64);
-    const flagG = new THREE.PlaneGeometry(0.016, 0.01); flagG.translate(0.008, 0.035, 0);
-    this.flags = new THREE.InstancedMesh(flagG, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }), 64);
-    for (const m of [this.trees, this.walls, this.roofs, this.mines, this.unitMesh, this.poles, this.flags]) {
+    const basic = (opts) => new THREE.MeshBasicMaterial(opts);
+    this.inst = [];
+    const mk = (geo, mat, max) => {
+      const m = new THREE.InstancedMesh(geo, mat, max);
       m.count = 0; m.frustumCulled = false;
       m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-      this.scene.add(m);
-    }
+      this.scene.add(m); this.inst.push(m);
+      return m;
+    };
+    const treeG = new THREE.ConeGeometry(0.0075, 0.022, 4); treeG.translate(0, 0.011, 0);
+    this.trees = mk(treeG, lam({}), 14000);
+    // Stone Age: hide tents
+    const hutG = new THREE.ConeGeometry(0.0055, 0.0095, 6); hutG.translate(0, 0.00475, 0);
+    this.huts = mk(hutG, lam({}), 12000);
+    // Bronze / Iron Age: walls + roof + door
+    const wallG = new THREE.BoxGeometry(0.0075, 0.0065, 0.0075); wallG.translate(0, 0.00325, 0);
+    this.walls = mk(wallG, lam({}), 12000);
+    const roofG = new THREE.ConeGeometry(0.0068, 0.0055, 4); roofG.rotateY(Math.PI / 4); roofG.translate(0, 0.0065 + 0.00275, 0);
+    this.roofs = mk(roofG, lam({}), 12000);
+    const doorG = new THREE.PlaneGeometry(0.0021, 0.0036); doorG.translate(0, 0.0018, 0.00377);
+    this.doors = mk(doorG, basic({ color: 0x2a1a10 }), 12000);
+    this.houseOffsets = [[-0.0062, -0.0042], [0.0062, -0.0032], [0.0004, 0.0068]].map(([x, z]) => new THREE.Matrix4().makeTranslation(x, 0, z));
+    // Campfire: ring of stones + flame
+    const pitG = new THREE.CylinderGeometry(0.003, 0.0033, 0.0012, 7); pitG.translate(0, 0.0006, 0);
+    this.pits = mk(pitG, lam({ color: 0x55504b }), 4000);
+    const flameG = new THREE.ConeGeometry(0.0019, 0.0058, 5); flameG.translate(0, 0.0012 + 0.0029, 0);
+    this.flames = mk(flameG, basic({}), 4000);
+    // Farms: crop rows
+    const cropG = new THREE.BoxGeometry(0.0017, 0.0022, 0.0105); cropG.translate(0, 0.0011, 0);
+    this.crops = mk(cropG, lam({}), 12000);
+    this.cropOffsets = [-0.0045, 0, 0.0045].map((x) => new THREE.Matrix4().makeTranslation(x, 0, 0));
+    // Mines: rock pile with a dark entrance
+    const mineG = new THREE.DodecahedronGeometry(0.0062, 0); mineG.scale(1, 0.65, 1); mineG.translate(0, 0.0015, 0);
+    this.mines = mk(mineG, lam({ color: 0x8a8580 }), 3000);
+    const shaftG = new THREE.PlaneGeometry(0.0028, 0.0026); shaftG.translate(0, 0.0016, 0.0058);
+    this.shafts = mk(shaftG, basic({ color: 0x141210 }), 3000);
+    // People: body + head (+ spear for soldiers)
+    const bodyG = new THREE.BoxGeometry(0.0021, 0.0034, 0.0015); bodyG.translate(0, 0.0017, 0);
+    this.bodies = mk(bodyG, lam({}), 5000);
+    const headG = new THREE.BoxGeometry(0.0017, 0.0017, 0.0017); headG.translate(0, 0.0034 + 0.00095, 0);
+    this.heads = mk(headG, lam({}), 5000);
+    const spearG = new THREE.BoxGeometry(0.00045, 0.0078, 0.00045); spearG.translate(0.0016, 0.0036, 0);
+    this.spears = mk(spearG, lam({ color: 0xd8d8d8 }), 1200);
+    // Boats: hull + sail
+    const hullG = new THREE.BoxGeometry(0.0095, 0.0025, 0.0042); hullG.translate(0, 0.00125, 0);
+    this.hulls = mk(hullG, lam({ color: 0x7a4a24 }), 300);
+    const sailG = new THREE.PlaneGeometry(0.0048, 0.0062); sailG.rotateY(Math.PI / 2); sailG.translate(0, 0.0058, 0);
+    this.sails = mk(sailG, basic({ side: THREE.DoubleSide }), 300);
+    // Capital flags
+    const poleG = new THREE.CylinderGeometry(0.0006, 0.0006, 0.03, 4); poleG.translate(0, 0.015, 0);
+    this.poles = mk(poleG, basic({ color: 0x3a2a1a }), 64);
+    const flagG = new THREE.PlaneGeometry(0.011, 0.007); flagG.translate(0.0055, 0.026, 0);
+    this.flags = mk(flagG, basic({ side: THREE.DoubleSide }), 64);
     this.m4 = new THREE.Matrix4(); this.q4 = new THREE.Quaternion(); this.v3 = new THREE.Vector3(); this.s3 = new THREE.Vector3();
+    this.villages = []; this.people = [];
+    this.buildEffects();
   }
 
   placeMatrix(c, scale, rOffset = 0) {
@@ -246,23 +302,61 @@ export class Renderer {
 
   syncInstances() {
     const s = this.state, w = s.world, col = this.tmpColor;
-    let nt = 0, nh = 0, nm = 0;
+    let nt = 0, nh = 0, nw = 0, nm = 0, nc = 0, nf = 0;
     const treeA = C(0x2f6b2a), treeB = C(0x1f4f22), treeJ = C(0x1d7a35), treeT = C(0x35553a);
+    const HIDE = C(0x9a7650), CREAM = C(0xe8dcc0), STONE = C(0xaaa69d), RUINC = C(0x77706a);
+    const CROP_A = C(0xe2c04a), CROP_B = C(0x9cba3c);
+    const tmp = new THREE.Matrix4(), scaleM = new THREE.Matrix4();
+    const villages = [];
+    const perTribe = new Map();
     for (let c = 0; c < w.count; c++) {
       const b = w.bld[c];
-      if (b === BLD.HOUSE && nh < 11990) {
+      if ((b === BLD.HOUSE || b === BLD.RUIN) && nh < 11990 && nw < 11990) {
         const base = this.placeMatrix(c, 1).clone();
-        const o = w.owner[c];
-        if (o >= 0) { const t = s.tribes[o].color; col.setRGB(t[0] * 0.85, t[1] * 0.85, t[2] * 0.85); } else col.set(0x666666);
-        const k = 2 + (c % 2);
+        const o = b === BLD.HOUSE ? w.owner[c] : -1;
+        const t = o >= 0 ? s.tribes[o] : null;
+        const tech = t ? t.tech : 1;
+        const cap = t && t.capital === c;
+        const k = b === BLD.RUIN ? 2 : 2 + (c % 2);
         for (let i = 0; i < k; i++) {
-          const m = this.m4.multiplyMatrices(base, this.houseOffsets[i]);
-          this.walls.setMatrixAt(nh, m); this.roofs.setMatrixAt(nh, m);
-          this.roofs.setColorAt(nh, col);
-          nh++;
+          tmp.multiplyMatrices(base, this.houseOffsets[i]);
+          if (cap && i === 0) tmp.multiply(scaleM.makeScale(1.55, 1.55, 1.55));
+          if (b === BLD.RUIN) {
+            tmp.multiply(scaleM.makeScale(1, 0.35, 1));
+            this.walls.setMatrixAt(nw, tmp); this.walls.setColorAt(nw, RUINC);
+            this.roofs.setMatrixAt(nw, scaleM.makeScale(0, 0, 0)); this.doors.setMatrixAt(nw, scaleM);
+            this.roofs.setColorAt(nw, RUINC);
+            nw++;
+          } else if (tech === 0) {
+            this.huts.setMatrixAt(nh, tmp);
+            col.copy(HIDE).lerp(this.tmpColor2.setRGB(t.color[0], t.color[1], t.color[2]), 0.35);
+            this.huts.setColorAt(nh, col);
+            nh++;
+          } else {
+            if (tech === 2) tmp.multiply(scaleM.makeScale(1, 1.25, 1));
+            this.walls.setMatrixAt(nw, tmp); this.roofs.setMatrixAt(nw, tmp); this.doors.setMatrixAt(nw, tmp);
+            this.walls.setColorAt(nw, tech === 2 ? STONE : CREAM);
+            this.roofs.setColorAt(nw, col.setRGB(t.color[0] * 0.85, t.color[1] * 0.85, t.color[2] * 0.85));
+            nw++;
+          }
+        }
+        if (t) {
+          villages.push({ c, t, base });
+          perTribe.set(t.id, (perTribe.get(t.id) || 0) + 1);
         }
       } else if (b === BLD.MINE && nm < 3000) {
-        this.mines.setMatrixAt(nm++, this.placeMatrix(c, 1));
+        const m = this.placeMatrix(c, 1);
+        this.mines.setMatrixAt(nm, m); this.shafts.setMatrixAt(nm, m);
+        nm++;
+      } else if (b === BLD.FARM && nc < 11990) {
+        const base = this.placeMatrix(c, 1).clone();
+        const ripe = w.wet[c] < -0.3 ? 0.2 : 0.5 + 0.5 * hash01(c * 3 + 1);
+        col.copy(CROP_B).lerp(CROP_A, ripe);
+        for (const off of this.cropOffsets) {
+          this.crops.setMatrixAt(nc, tmp.multiplyMatrices(base, off));
+          this.crops.setColorAt(nc, col);
+          nc++;
+        }
       }
       if (w.trees[c] > 0.3 && b === BLD.NONE && nt < 14000 && !isWater(w.biome[c])) {
         const sc = 0.55 + w.trees[c] * 0.6;
@@ -274,12 +368,52 @@ export class Renderer {
         nt++;
       }
     }
-    this.trees.count = nt; this.walls.count = nh; this.roofs.count = nh; this.mines.count = nm;
-    for (const m of [this.trees, this.walls, this.roofs, this.mines]) {
+    this.trees.count = nt; this.huts.count = nh; this.mines.count = nm; this.shafts.count = nm; this.crops.count = nc;
+    this.walls.count = nw; this.roofs.count = nw; this.doors.count = nw;
+
+    // Campfires (flames flicker every frame) and the people of each village
+    this.villages = villages.slice(0, 4000);
+    this.pits.count = this.villages.length;
+    const FLAME_A = C(0xff8a1a), FLAME_B = C(0xffd23a);
+    const people = [];
+    const v = new THREE.Vector3();
+    for (let i = 0; i < this.villages.length; i++) {
+      const vil = this.villages[i];
+      this.pits.setMatrixAt(i, vil.base);
+      this.flames.setColorAt(i, i % 2 ? FLAME_A : FLAME_B);
+      const t = vil.t;
+      const n = Math.max(1, Math.min(4, Math.round(t.pop / ((perTribe.get(t.id) || 1) * 9))));
+      // Work places within 2 steps: farms, mines, forest
+      const work = [];
+      for (let k = 0; k < 3; k++) {
+        const a = w.nbr[vil.c * 3 + k];
+        for (const x of [a, w.nbr[a * 3], w.nbr[a * 3 + 1], w.nbr[a * 3 + 2]]) {
+          if (x === vil.c || w.owner[x] !== t.id || isWater(w.biome[x])) continue;
+          if (w.bld[x] === BLD.FARM || w.bld[x] === BLD.MINE || w.trees[x] > 0.3) work.push(x);
+        }
+      }
+      for (let p = 0; p < n && people.length < 4500; p++) {
+        const h = hash01(vil.c * 31 + p * 7);
+        tmp.multiplyMatrices(vil.base, this.houseOffsets[p % 3]);
+        v.setFromMatrixPosition(tmp);
+        const home = v.clone().normalize(), rh = topRadius(w.level[vil.c]);
+        const dst = work.length ? work[Math.floor(h * work.length)] : vil.c;
+        const jx = (hash01(vil.c + p * 13) - 0.5) * 0.008, jz = (hash01(vil.c + p * 17) - 0.5) * 0.008;
+        tmp.copy(this.placeMatrix(dst, 1)).multiply(scaleM.makeTranslation(jx, 0, jz));
+        v.setFromMatrixPosition(tmp);
+        people.push({
+          home, rh, dst: v.clone().normalize(), rd: topRadius(w.level[dst]),
+          phase: h, speed: 1 / (9 + 8 * hash01(vil.c * 5 + p)),
+          body: new THREE.Color(t.color[0], t.color[1], t.color[2]),
+          skin: SKIN[Math.floor(hash01(vil.c * 11 + p) * SKIN.length)],
+        });
+      }
+    }
+    this.people = people;
+    for (const m of this.inst) {
       m.instanceMatrix.needsUpdate = true;
       if (m.instanceColor) m.instanceColor.needsUpdate = true;
     }
-    let nf = 0;
     for (const t of s.tribes) {
       if (!t.alive || nf >= 64) continue;
       const m = this.placeMatrix(t.capital, 1);
@@ -291,6 +425,227 @@ export class Renderer {
     this.poles.count = nf; this.flags.count = nf;
     this.poles.instanceMatrix.needsUpdate = true; this.flags.instanceMatrix.needsUpdate = true;
     if (this.flags.instanceColor) this.flags.instanceColor.needsUpdate = true;
+  }
+
+  // Orientation matrix standing on the globe at unit dir `up`, facing `fwd` (any vector).
+  standMatrix(up, r, fwd, scale, out) {
+    const f = this._f || (this._f = new THREE.Vector3());
+    const x = this._x || (this._x = new THREE.Vector3());
+    f.copy(fwd).addScaledVector(up, -fwd.dot(up));
+    if (f.lengthSq() < 1e-12) f.set(up.y, -up.x, 0).addScaledVector(up, 0);
+    f.normalize();
+    x.crossVectors(up, f); // right
+    out.makeBasis(f, up, x.negate());
+    out.scale(this.s3.set(scale, scale, scale));
+    return out.setPosition(up.x * r, up.y * r, up.z * r);
+  }
+
+  // Every frame: flicker campfires, walk villagers, move armies and boats.
+  updateLife(dt) {
+    const near = (this.camBase || this.camera.position).length() < 2.4;
+    const T = this.time;
+    // flames
+    const sc = new THREE.Matrix4();
+    for (let i = 0; i < this.villages.length; i++) {
+      const f = 0.75 + 0.35 * Math.abs(Math.sin(T * 11 + i * 1.7)) + 0.15 * Math.sin(T * 23 + i);
+      this.m4.multiplyMatrices(this.villages[i].base, sc.makeScale(0.9 + 0.2 * Math.sin(T * 17 + i), f, 0.9 + 0.2 * Math.cos(T * 13 + i)));
+      this.flames.setMatrixAt(i, this.m4);
+    }
+    this.flames.count = this.villages.length;
+    this.flames.instanceMatrix.needsUpdate = true;
+
+    let nb = 0, ns = 0, nboat = 0;
+    const up = new THREE.Vector3(), fwd = new THREE.Vector3();
+    const putPerson = (dir, r, face, body, skin, scale, spear) => {
+      this.standMatrix(dir, r, face, scale, this.m4);
+      this.bodies.setMatrixAt(nb, this.m4); this.bodies.setColorAt(nb, body);
+      this.heads.setMatrixAt(nb, this.m4); this.heads.setColorAt(nb, skin);
+      nb++;
+      if (spear && ns < 1200) this.spears.setMatrixAt(ns++, this.m4);
+    };
+    if (near) {
+      for (const p of this.people) {
+        if (nb >= 4900) break;
+        const ph = (T * p.speed + p.phase) % 1;
+        let s, out = true;
+        if (ph < 0.4) s = ph / 0.4;
+        else if (ph < 0.6) s = 1;
+        else if (ph < 0.95) { s = 1 - (ph - 0.6) / 0.35; out = false; }
+        else s = 0;
+        s = s * s * (3 - 2 * s);
+        up.copy(p.home).lerp(p.dst, s).normalize();
+        const walking = s > 0 && s < 1;
+        const r = (s < 0.5 ? p.rh : p.rd) + (walking ? Math.abs(Math.sin(T * 14 + p.phase * 40)) * 0.0005 : 0);
+        fwd.copy(out ? p.dst : p.home).sub(up);
+        if (!walking) fwd.set(Math.sin(T * 0.7 + p.phase * 9), Math.cos(T * 0.5 + p.phase * 7), Math.sin(p.phase * 50));
+        putPerson(up, r, fwd, p.body, p.skin, 1, false);
+      }
+    }
+    // armies + boats
+    for (const u of this.units) {
+      u.t += dt;
+      const k = Math.min(1, u.t / u.dur);
+      up.copy(u.a).lerp(u.b, k).normalize();
+      fwd.copy(u.b).sub(u.a);
+      if (u.kind === 'boat') {
+        if (nboat >= 300) continue;
+        const r = Math.max(1.0005, u.ra + (u.rb - u.ra) * k);
+        this.standMatrix(up, r + Math.sin(T * 3 + u.a.x * 9) * 0.0004, fwd, 1.6, this.m4);
+        this.hulls.setMatrixAt(nboat, this.m4); this.sails.setMatrixAt(nboat, this.m4);
+        this.sails.setColorAt(nboat, u.color);
+        nboat++;
+      } else if (nb < 4990) {
+        const r = u.ra + (u.rb - u.ra) * k + Math.abs(Math.sin(u.t * 14)) * 0.0006;
+        putPerson(up, r, fwd, u.color, SKIN[1], 1.25, u.kind === 'army');
+      }
+    }
+    this.units = this.units.filter((u) => u.t < u.dur);
+    this.bodies.count = nb; this.heads.count = nb; this.spears.count = ns;
+    this.hulls.count = nboat; this.sails.count = nboat;
+    for (const m of [this.bodies, this.heads, this.spears, this.hulls, this.sails]) {
+      m.instanceMatrix.needsUpdate = true;
+      if (m.instanceColor) m.instanceColor.needsUpdate = true;
+    }
+  }
+
+  // ------------------------------------------------------------ particles + fire
+  buildEffects() {
+    const fireG = new THREE.ConeGeometry(0.0036, 0.011, 5); fireG.translate(0, 0.0055, 0);
+    this.fireMesh = new THREE.InstancedMesh(fireG, new THREE.MeshBasicMaterial({}), 3600);
+    const partG = new THREE.BoxGeometry(1, 1, 1);
+    this.partMesh = new THREE.InstancedMesh(partG, new THREE.MeshBasicMaterial({}), 5000);
+    for (const m of [this.fireMesh, this.partMesh]) {
+      m.count = 0; m.frustumCulled = false;
+      m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      this.scene.add(m); this.inst.push(m);
+    }
+    this.parts = [];
+    this.hot = new Map(); // crater cell -> time it was hit
+    this.fireOffsets = [[0, 0], [-0.0045, 0.003], [0.004, -0.0035]];
+  }
+
+  // pos: world position; vel: world velocity; grow: size multiplier over life; grav: pull to center
+  emit(pos, vel, life, size, color, grow = 1, grav = 0) {
+    if (this.parts.length >= 5000) return;
+    this.parts.push({ p: pos.clone(), v: vel.clone(), age: 0, life, size, grow, grav, color: color.isColor ? color : new THREE.Color(color) });
+  }
+
+  // Random unit vector near `up` (for upward bursts)
+  jitterUp(up, spread, out = new THREE.Vector3()) {
+    return out.randomDirection().multiplyScalar(spread).add(up).normalize();
+  }
+
+  burst(cell, r, n, colors, speed, size, life, grav) {
+    const w = this.state.world;
+    const up = this.cellPos(cell).normalize();
+    const v = new THREE.Vector3();
+    for (let i = 0; i < n; i++) {
+      const p = this.cellPos(cell).add(v.randomDirection().multiplyScalar(Math.sin(r) * Math.random()));
+      p.setLength(this.cellPos(cell).length() + 0.004); // start on the surface
+      const dir = this.jitterUp(up, 1.1);
+      this.emit(p, dir.multiplyScalar(speed * (0.4 + Math.random())), life * (0.6 + 0.8 * Math.random()), size * (0.6 + 0.8 * Math.random()),
+        colors[Math.floor(Math.random() * colors.length)], 1, grav);
+    }
+  }
+
+  updateEffects(dt) {
+    const s = this.state, w = s.world, T = this.time;
+    const v = new THREE.Vector3(), up = new THREE.Vector3(), tmp = new THREE.Matrix4(), sc = new THREE.Matrix4();
+    // Flames on burning tiles + smoke and sparks rising from them
+    let nf = 0, i = 0;
+    for (const c of s.burning) {
+      if (nf >= 3590) break;
+      const base = this.placeMatrix(c, 1).clone();
+      const big = 0.7 + 0.6 * Math.min(1, w.trees[c] + 0.3);
+      for (let k = 0; k < 3; k++) {
+        const o = this.fireOffsets[k];
+        const f = big * (0.7 + 0.45 * Math.abs(Math.sin(T * 9 + c * 0.37 + k * 2.1)));
+        tmp.multiplyMatrices(base, sc.makeTranslation(o[0], 0, o[1])).multiply(sc.makeScale(f * 0.9, f * (1 + 0.3 * Math.sin(T * 15 + c + k)), f * 0.9));
+        this.fireMesh.setMatrixAt(nf, tmp);
+        this.fireMesh.setColorAt(nf, this.tmpColor.setHex((c + k) % 3 === 0 ? 0xffd23a : (c + k) % 3 === 1 ? 0xff7a1a : 0xff4a10));
+        nf++;
+      }
+      if (i++ < 400) {
+        up.copy(this.cellPos(c)).normalize();
+        if (Math.random() < dt * 1.1) this.emit(this.cellPos(c, 0.008), this.jitterUp(up, 0.25, v).multiplyScalar(0.035), 2.8, 0.006, SMOKE[Math.floor(Math.random() * 3)], 2.6);
+        if (Math.random() < dt * 4) this.emit(this.cellPos(c, 0.004), this.jitterUp(up, 0.6, v).multiplyScalar(0.05), 0.9, 0.0028, Math.random() < 0.5 ? 0xffb030 : 0xff5a10, 0.3);
+      }
+    }
+    this.fireMesh.count = nf;
+    this.fireMesh.instanceMatrix.needsUpdate = true;
+    if (this.fireMesh.instanceColor) this.fireMesh.instanceColor.needsUpdate = true;
+
+    // Hot craters: glowing, smoking
+    for (const [c, t0] of this.hot) {
+      const age = T - t0;
+      if (age > 14) {
+        this.hot.delete(c);
+        this.writeCellColor(c, this.cellColor(c, new THREE.Color()));
+        this.colAttr.needsUpdate = true;
+        continue;
+      }
+      if (Math.random() < dt * 0.35 * (1 - age / 14)) {
+        up.copy(this.cellPos(c)).normalize();
+        const wet = isWater(this.state.world.biome[c]);
+        this.emit(this.cellPos(c, 0.004), this.jitterUp(up, 0.2, v).multiplyScalar(0.03), 3, 0.008, wet ? STEAM : SMOKE[Math.floor(Math.random() * 3)], 2.6);
+      }
+    }
+    // Sick and blessed tribes
+    for (const vil of this.villages) {
+      const t = vil.t;
+      if (t.plague > 0 && Math.random() < dt * 0.9) {
+        up.copy(this.cellPos(vil.c)).normalize();
+        this.emit(this.cellPos(vil.c, 0.006).add(v.randomDirection().multiplyScalar(0.008)), this.jitterUp(up, 0.5, v).multiplyScalar(0.012), 3, 0.008, Math.random() < 0.5 ? 0x7dff4a : 0x3fae2a, 2.2);
+      }
+      if (t.blessed > 0 && Math.random() < dt * 1.2) {
+        up.copy(this.cellPos(vil.c)).normalize();
+        this.emit(this.cellPos(vil.c, 0.004).add(v.randomDirection().multiplyScalar(0.01)), this.jitterUp(up, 0.15, v).multiplyScalar(0.03), 1.6, 0.0035, Math.random() < 0.5 ? 0xffe27a : 0xffffff, 0.2);
+      }
+    }
+    // Lightning in rain clouds
+    for (const [wx, obj] of this.weatherObjs) {
+      if (wx.type === 'rain' && Math.random() < dt * 0.8) this.lightning(wx);
+    }
+
+    // Move particles
+    let n = 0;
+    const q = new THREE.Quaternion(), s3 = new THREE.Vector3(), cen = new THREE.Vector3();
+    for (const p of this.parts) {
+      p.age += dt;
+      if (p.age >= p.life) continue;
+      if (p.grav) p.v.addScaledVector(cen.copy(p.p).normalize(), -p.grav * dt);
+      p.p.addScaledVector(p.v, dt);
+      p.v.multiplyScalar(1 - 0.6 * dt);
+      const k = p.age / p.life;
+      const size = p.size * (1 + (p.grow - 1) * k) * (k > 0.7 ? (1 - k) / 0.3 : 1);
+      if (p.p.length() < 0.995) { p.age = p.life; continue; } // hit the ground
+      s3.setScalar(Math.max(0.0001, size));
+      tmp.compose(p.p, q, s3);
+      this.partMesh.setMatrixAt(n, tmp);
+      this.partMesh.setColorAt(n, p.color);
+      n++;
+    }
+    this.parts = this.parts.filter((p) => p.age < p.life);
+    this.partMesh.count = n;
+    this.partMesh.instanceMatrix.needsUpdate = true;
+    if (this.partMesh.instanceColor) this.partMesh.instanceColor.needsUpdate = true;
+  }
+
+  lightning(wx) {
+    const w = this.state.world;
+    const c = wx.cells[Math.floor(Math.random() * wx.cells.length)];
+    const ground = this.cellPos(c);
+    const top = ground.clone().normalize().multiplyScalar(1.17);
+    const pts = [top];
+    for (let i = 1; i < 6; i++) {
+      const p = top.clone().lerp(ground, i / 6).add(new THREE.Vector3().randomDirection().multiplyScalar(0.008));
+      pts.push(p);
+    }
+    pts.push(ground);
+    const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0xf4f0ff, transparent: true }));
+    this.scene.add(line);
+    this.flash(ground, 0.025, 0xc8d8ff, 0.25);
+    this.anims.push({ t: 0, dur: 0.25, step: (k) => { line.material.opacity = 1 - k; }, done: () => this.scene.remove(line) });
   }
 
   // ------------------------------------------------------------ helpers
@@ -338,16 +693,16 @@ export class Renderer {
     this.cursor.visible = true;
   }
 
-  flyTo(cell) {
-    const dist = Math.min(this.camera.position.length(), 2.4);
+  flyTo(cell, toDist) {
+    const dist = toDist ?? Math.min(this.camera.position.length(), 2.4);
     const target = this.cellPos(cell).normalize().multiplyScalar(dist);
-    const start = this.camera.position.clone();
+    const start = (this.camBase || this.camera.position).clone();
     this.anims.push({
       t: 0, dur: 1.1,
       step: (k) => {
         const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
         const v = start.clone().normalize().lerp(target.clone().normalize(), e).normalize();
-        this.camera.position.copy(v.multiplyScalar(start.length() + (dist - start.length()) * e));
+        (this.camBase || this.camera.position).copy(v.multiplyScalar(start.length() + (dist - start.length()) * e));
       },
     });
   }
@@ -436,26 +791,22 @@ export class Renderer {
         break;
       case 'boat': this.addUnit(fx.from, fx.to, col, 3.5, 'boat'); break;
       case 'spawn': this.beam(fx.cell, new THREE.Color(col[0], col[1], col[2])); break;
-      case 'bless': this.beam(fx.cell, 0xffe27a, 2.2); break;
-      case 'plague': this.flash(this.cellPos(fx.cell), 0.12, 0x6bff4a, 1.4); break;
-      case 'quake': this.shake = 0.6; this.flash(this.cellPos(fx.cell), fx.r * 1.3, 0x9a7a55, 1.2); break;
-      case 'impact': break; // drawn by playMeteor
-    }
-  }
-
-  // Little workers walking around villages.
-  spawnWorkers() {
-    const s = this.state, w = s.world;
-    for (const t of s.tribes) {
-      if (!t.alive || Math.random() > 0.5) continue;
-      const cells = t._cellArr && t._cellArrTick === s.tick ? t._cellArr : (t._cellArr = [...t.cells], t._cellArrTick = s.tick, t._cellArr);
-      if (!cells.length) continue;
-      const from = cells[Math.floor(Math.random() * cells.length)];
-      if (w.bld[from] !== BLD.HOUSE) continue;
-      let to = from;
-      for (let i = 0; i < 2; i++) to = w.nbr[to * 3 + Math.floor(Math.random() * 3)];
-      if (isWater(w.biome[to])) continue;
-      this.addUnit(from, to, t.color, 2 + Math.random() * 2, 'walk');
+      case 'quake':
+        this.shake = 0.8;
+        this.burst(fx.cell, fx.r, 220, [0x8a6a48, 0x6b5238, 0xa88a68, 0x5a4a3a], 0.05, 0.01, 2.6, 0.02);
+        break;
+      case 'impact': {
+        const w = this.state.world;
+        for (const c of cellsWithin(w, fx.cell, fx.r)) this.hot.set(c, this.time);
+        this.burst(fx.cell, fx.r * 0.5, 260, [0x5a4030, 0x3a2a20, 0xff7a1a, 0xffc040, 0x777070], 0.22, 0.006, 2.2, 0.35);
+        this.burst(fx.cell, fx.r * 0.4, 60, [0x3a3633, 0x55504c], 0.04, 0.02, 4, 0);
+        break;
+      }
+      case 'grow':
+        this.burst(fx.cell, fx.r, 120, [0x7dff6a, 0x3fbf3a, 0xc8ff9a], 0.03, 0.004, 1.8, 0);
+        break;
+      case 'plague': this.burst(fx.cell, 0.04, 80, [0x7dff4a, 0x3fae2a], 0.02, 0.009, 2.5, 0); break;
+      case 'bless': this.beam(fx.cell, 0xffe27a, 2.2); this.burst(fx.cell, 0.04, 90, [0xffe27a, 0xffffff], 0.05, 0.004, 1.6, 0); break;
     }
   }
 
@@ -507,15 +858,36 @@ export class Renderer {
   frame(dt) {
     this.time += dt;
     this.controls.rotateSpeed = 0.35 * Math.max(0.15, this.camera.position.length() - 1);
+    // OrbitControls owns the 'base' camera; we restore it before each update.
+    if (this.camBase) { this.camera.position.copy(this.camBase); this.camBase = null; }
     this.controls.update();
+    this.camera.updateMatrixWorld();
+    // Close to the ground: swing the camera back and look at the same spot from the side.
+    const dist = this.camera.position.length();
+    const tilt = Math.min(1, Math.max(0, (1.85 - dist) / (1.85 - 1.16)));
+    if (tilt > 0) {
+      this.camBase = this.camera.position.clone();
+      const up = this.camBase.clone().normalize();
+      const focus = up.clone().multiplyScalar(1.03);
+      const scrUp = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 1);
+      const h = dist - 1.03, ang = tilt * 0.95;
+      this.camera.position.copy(focus).addScaledVector(up, Math.cos(ang) * h).addScaledVector(scrUp, -Math.sin(ang) * h);
+      this.camera.lookAt(focus);
+      this.camera.updateMatrixWorld();
+    }
+    if (this.pixelMode === 'auto') {
+      const want = this.autoPixel();
+      if (want !== this.pixel) { this.pixel = want; this.resize(); }
+    }
     const s = this.state;
     if (s) {
       for (const fx of s.fx) this.handleFx(fx);
       s.fx.length = 0;
       // fire flicker
-      if (s.burning.size) {
+      if (s.burning.size || this.hot.size) {
         const col = new THREE.Color();
         for (const c of s.burning) this.writeCellColor(c, this.cellColor(c, col));
+        for (const c of this.hot.keys()) this.writeCellColor(c, this.cellColor(c, col));
         this.colAttr.needsUpdate = true;
       }
       this.syncWeather();
@@ -538,29 +910,7 @@ export class Renderer {
       if (a.t >= a.dur) { a.done?.(); a.finished = true; }
     }
     this.anims = this.anims.filter((a) => !a.finished);
-    // units
-    if (this.unitMesh) {
-      let n = 0;
-      const v = new THREE.Vector3(), q = new THREE.Quaternion(), sc = new THREE.Vector3(1, 1, 1), up = new THREE.Vector3(0, 1, 0);
-      for (const u of this.units) {
-        u.t += dt;
-        const k = Math.min(1, u.t / u.dur);
-        v.copy(u.a).lerp(u.b, k).normalize();
-        const r = u.ra + (u.rb - u.ra) * k + (u.kind === 'boat' ? Math.sin(k * Math.PI) * 0.02 : Math.abs(Math.sin(u.t * 14)) * 0.002);
-        const r2 = u.kind === 'boat' ? Math.max(r, 1.002) : r;
-        q.setFromUnitVectors(up, v);
-        sc.setScalar(u.kind === 'boat' ? 2.2 : u.kind === 'army' ? 1.3 : 0.9);
-        v.multiplyScalar(r2);
-        this.m4.compose(v, q, sc);
-        this.unitMesh.setMatrixAt(n, this.m4);
-        this.unitMesh.setColorAt(n, u.kind === 'boat' ? this.tmpColor.set(0x8b5a2b) : u.color);
-        n++;
-      }
-      this.units = this.units.filter((u) => u.t < u.dur);
-      this.unitMesh.count = n;
-      this.unitMesh.instanceMatrix.needsUpdate = true;
-      if (this.unitMesh.instanceColor) this.unitMesh.instanceColor.needsUpdate = true;
-    }
+    if (this.state && this.bodies) { this.updateLife(dt); this.updateEffects(dt); }
     // camera shake
     let off = null;
     if (this.shake > 0) {
